@@ -17,7 +17,15 @@ def main():
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--analyze", action="store_true")
     parser.add_argument("--rerun", action="store_true", help="Reanalyze unchanged emails too.")
+    parser.add_argument(
+        "--defer-first",
+        type=int,
+        default=0,
+        help="Skip preanalysis of the first N emails in dataset order; preserve existing runs.",
+    )
     args = parser.parse_args()
+    if args.defer_first < 0:
+        parser.error("--defer-first must be non-negative.")
     settings = Settings()
     if settings.app_env != "development":
         parser.error("Local dataset import is only available in development.")
@@ -32,7 +40,7 @@ def main():
         if args.analyze or args.rerun:
             items = store.list_samples(limit=100_000)["items"]
             count = 0
-            for item in items:
+            for item in items[args.defer_first :]:
                 detail = store.detail(item["id"])
                 current = detail["current_run"]
                 if args.rerun or not current or current["pipeline_version"] != PIPELINE_VERSION:

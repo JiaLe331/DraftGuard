@@ -220,3 +220,26 @@ def test_interrupted_runs_expire_without_auto_retry(tmp_path):
 def test_relative_data_directory_is_backend_relative():
     settings = Settings(local_data_dir=Path(".local"), _env_file=None)
     assert settings.local_data_dir == Path(__file__).resolve().parents[1] / ".local"
+
+
+def test_cli_defer_preserves_real_unanalyzed_state_and_existing_runs(tmp_path, monkeypatch):
+    from app.cli import main
+
+    root = dataset(tmp_path / "input", 3)
+    local = tmp_path / "local"
+    monkeypatch.setenv("LOCAL_DATA_DIR", str(local))
+    monkeypatch.setenv("DEV_AUDIT_DB", str(tmp_path / "audit.sqlite3"))
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setattr(
+        "sys.argv",
+        ["cli", "import-dataset", "--source", str(root), "--analyze", "--defer-first", "1"],
+    )
+    main()
+    store = Store(local)
+    assert store.detail("email_000")["current_run"] is None
+    assert store.detail("email_000")["category"] is None
+    assert store.list_samples()["summary"]["states"]["NOT_ANALYZED"] == 1
+    store.analyze("email_000", 1)
+    original = store.detail("email_000")["current_run"]["id"]
+    main()
+    assert store.detail("email_000")["current_run"]["id"] == original

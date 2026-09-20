@@ -80,6 +80,7 @@ def extract_document(
             "Source units retained.",
             source_unit_count=len(units),
             source_unit_ids=[u.unit_id for u in units],
+            source_units=[u.model_dump(mode="json") for u in units] if observer else [],
             duration_ms=round((perf_counter() - started) * 1000, 3),
         )
     except Exception as exc:

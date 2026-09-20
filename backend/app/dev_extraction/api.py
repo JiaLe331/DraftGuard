@@ -45,7 +45,7 @@ def page_bounds(limit, offset):
         }
     },
 )
-async def upload(request: Request):
+async def upload(request: Request, wait: bool = True):
     settings = request.app.state.settings
     if not request.headers.get("content-type", "").startswith("multipart/form-data"):
         raise DatasetError("MULTIPART_REQUIRED", "Send the file as multipart form data.", 415)
@@ -66,7 +66,7 @@ async def upload(request: Request):
     if len(content) > settings.dev_upload_limit:
         raise DatasetError("FILE_TOO_LARGE", "The file exceeds the development upload limit.", 413)
     _, service = services(request)
-    return await run_in_threadpool(
+    result = await run_in_threadpool(
         service.run,
         [
             DocumentInput(
@@ -80,7 +80,9 @@ async def upload(request: Request):
         filename,
         None,
         request.state.request_id,
+        wait,
     )
+    return JSONResponse(result, status_code=200 if wait else 202)
 
 
 @router.get("/emails")
@@ -97,7 +99,7 @@ def email(request: Request, email_id: str):
 
 
 @router.post("/emails/{email_id}/extract")
-def extract_email(request: Request, email_id: str):
+def extract_email(request: Request, email_id: str, wait: bool = True):
     dataset = Dataset(request.app.state.settings.dataset_dir)
     record = dataset.email(email_id)
     if len(record["attachments"]) > 10:
@@ -109,19 +111,43 @@ def extract_email(request: Request, email_id: str):
         for reference in record["attachments"]
     ]
     _, service = services(request)
-    return service.run(inputs, "dataset_email", record["subject"], record, request.state.request_id)
+    result = service.run(
+        inputs, "dataset_email", record["subject"], record, request.state.request_id, wait
+    )
+    return JSONResponse(result, status_code=200 if wait else 202)
 
 
 @router.get("/runs")
-def runs(request: Request, limit: int = 25, offset: int = 0):
+def runs(
+    request: Request,
+    limit: int = 25,
+    offset: int = 0,
+    q: str = "",
+    status: Literal["RUNNING", "SUCCEEDED", "FAILED", "INTERRUPTED"] | None = None,
+    source_type: Literal["upload", "dataset_email"] | None = None,
+    needs_review: bool | None = None,
+):
     page_bounds(limit, offset)
     store, _ = services(request)
-    return store.list(limit, offset)
+    return store.list(limit, offset, q, status, source_type, needs_review)
+
+
+@router.get("/runs/{run_id}/events")
+def events(request: Request, run_id: UUID, after_sequence: int = 0, limit: int = 100):
+    if after_sequence < 0 or not 1 <= limit <= 500:
+        raise DatasetError("INVALID_PAGINATION", "Use a nonnegative cursor and a limit of 1–500.")
+    store, service = services(request)
+    service.check_recording(str(run_id))
+    result = store.events(str(run_id), after_sequence, limit)
+    if result is None:
+        raise DatasetError("RUN_NOT_FOUND", "The extraction run was not found.", 404)
+    return result
 
 
 @router.get("/runs/{run_id}")
 def run(request: Request, run_id: UUID, download: bool = False):
-    store, _ = services(request)
+    store, service = services(request)
+    service.check_recording(str(run_id))
     result = store.get(str(run_id))
     if result is None:
         raise DatasetError("RUN_NOT_FOUND", "The extraction run was not found.", 404)

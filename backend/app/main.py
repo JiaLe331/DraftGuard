@@ -2,6 +2,7 @@ import sqlite3
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,7 +25,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(application):
         if settings.dev_extraction_enabled:
             application.state.audit_store.initialize()
-        yield
+        try:
+            yield
+        finally:
+            if settings.dev_extraction_enabled:
+                await run_in_threadpool(application.state.run_service.shutdown)
 
     application = FastAPI(title="DraftGuard API", version="0.1.0", lifespan=lifespan)
     application.state.settings = settings

@@ -1,22 +1,24 @@
-"""Shared synchronous run orchestration for upload and email adapters."""
+"""Shared run orchestration; HTTP requests do not own the lifetime of extraction."""
 
-import base64
-import json
-import os
-import subprocess
-import sys
+import logging
+import sqlite3
+import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from hashlib import sha256
-from pathlib import Path, PureWindowsPath
+from pathlib import PureWindowsPath
 from time import perf_counter
 from uuid import uuid4
 
 from app.config import Settings
-from app.extraction import DocumentExtraction
+from app.extraction.models import SourceUnit
 
 from .dataset import DatasetError
-from .store import AuditStore, now
+from .process import run_worker
+from .store import AuditStore, event, interrupt, now
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -27,189 +29,306 @@ class DocumentInput:
     max_file_bytes: int = 10 * 1024 * 1024
 
 
-def run_worker(content: bytes, document: dict, timeout: float, max_file_bytes: int):
-    payload = {
-        "content": base64.b64encode(content).decode("ascii"),
-        "filename": document["filename"],
-        "document_id": document["document_id"],
-        "expected_role": document["expected_role"],
-        "max_file_bytes": max_file_bytes,
-    }
-    process = subprocess.Popen(
-        [sys.executable, "-m", "app.dev_extraction.worker"],
-        cwd=Path(__file__).resolve().parents[2],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-    )
-    error = None
-    try:
-        try:
-            stdout, _ = process.communicate(json.dumps(payload).encode(), timeout=timeout)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            stdout, _ = process.communicate()
-            error = {"code": "EXTRACTION_TIMEOUT", "message": "Extraction exceeded its time limit."}
-    finally:
-        if process.poll() is None:
-            process.kill()
-            process.communicate()
-    events, result = [], None
-    for line in stdout.splitlines():
-        try:
-            message = json.loads(line)
-            if message["type"] == "event":
-                events.append(message["payload"])
-            elif message["type"] == "result":
-                result = DocumentExtraction.model_validate(message["payload"]).model_dump(
-                    mode="json"
-                )
-            elif message["type"] == "error":
-                error = message["payload"]
-        except (ValueError, KeyError, TypeError):
-            error = {
-                "code": "INVALID_WORKER_OUTPUT",
-                "message": "The extraction output was incomplete.",
-            }
-    if error or process.returncode != 0 or result is None:
-        return (
-            None,
-            events,
-            error or {"code": "WORKER_FAILED", "message": "The extraction worker failed."},
-        )
-    return result, events, None
-
-
 class RunService:
     def __init__(self, store: AuditStore, settings: Settings):
         self.store, self.settings = store, settings
+        self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="extraction")
+        self.capacity = threading.BoundedSemaphore(2)
+        self.stopping = threading.Event()
+        self.lock = threading.Lock()
+        self.recording_failures = set()
 
-    def run(
-        self,
-        inputs: list[DocumentInput],
-        source_type: str,
-        source_label: str,
-        email: dict | None,
-        request_id: str,
-    ):
-        run = {
-            "run_id": str(uuid4()),
-            "request_id": request_id,
-            "source_type": source_type,
-            "source_label": source_label,
-            "email": email,
-            "created_at": now(),
-            "finished_at": None,
-            "processing_status": "RUNNING",
-            "needs_review": True,
-            "document_count": len(inputs),
-            "pipeline_version": "rules-1",
-            "issues": [],
-            "documents": [],
-        }
-        for source in inputs:
-            run["documents"].append(
-                {
-                    "document_id": str(uuid4()),
-                    "filename": PureWindowsPath(source.filename).name,
-                    "expected_role": source.expected_role,
-                    "content_sha256": None,
-                    "byte_count": None,
-                    "has_original": False,
-                    "processing_status": "PENDING",
-                    "result": None,
-                    "events": [],
-                    "error": None,
-                    "last_completed_stage": None,
-                }
-            )
-        self.store.create(run)
-        start = perf_counter()
-        for source, document in zip(inputs, run["documents"], strict=True):
-            document_started = perf_counter()
-            document["processing_status"] = "RUNNING"
-            self.store.save(run)
-            remaining = self.settings.dev_run_timeout - (perf_counter() - start)
+    def shutdown(self):
+        self.stopping.set()
+        self.executor.shutdown(wait=True)
+
+    def check_recording(self, run_id):
+        with self.lock:
+            failed = run_id in self.recording_failures
+        if failed:
+            # A read retry may finalize the failure once storage becomes writable again.
             try:
-                if remaining <= 0:
-                    raise DatasetError(
-                        "RUN_TIMEOUT", "The run time limit was reached before this attachment."
+                saved = self.store.get(run_id)
+                if saved and saved["processing_status"] == "RUNNING":
+                    self._fail(
+                        saved, "AUDIT_SAVE_FAILED", "Audit recording failed; extraction stopped."
                     )
-                content = source.read()
-                if len(content) > source.max_file_bytes:
-                    raise DatasetError(
-                        "RESOURCE_LIMIT", "The attachment exceeds the document size limit."
-                    )
-                document.update(content_sha256=sha256(content).hexdigest(), byte_count=len(content))
-                self.store.save_original(
-                    run["run_id"], document["document_id"], document["filename"], content
-                )
-                document["has_original"] = True
-                self.store.save(run)
-                remaining = self.settings.dev_run_timeout - (perf_counter() - start)
-                if remaining <= 0:
-                    raise DatasetError(
-                        "RUN_TIMEOUT", "The run time limit was reached before extraction."
-                    )
-                result, events, error = run_worker(
-                    content,
-                    document,
-                    min(self.settings.dev_document_timeout, remaining),
-                    source.max_file_bytes,
-                )
-                document.update(result=result, events=events, error=error)
-                document["processing_status"] = (
-                    "FAILED"
-                    if error
-                    or result["parsing_status"]
-                    in {
-                        "FAILED",
-                        "REJECTED",
+                elif saved:
+                    with self.lock:
+                        self.recording_failures.discard(run_id)
+            except sqlite3.Error:
+                pass
+            with self.lock:
+                failed = run_id in self.recording_failures
+        if failed:
+            raise DatasetError(
+                "AUDIT_SAVE_FAILED",
+                "Audit recording failed. The run did not complete successfully.",
+                503,
+            )
+
+    def run(self, inputs, source_type, source_label, email, request_id, wait=True):
+        if self.stopping.is_set() or not self.capacity.acquire(blocking=False):
+            raise DatasetError(
+                "EXTRACTION_BUSY",
+                "Two extractions are already active or the backend is stopping. Try again shortly.",
+                503,
+            )
+        run, start = None, perf_counter()
+        submitted = False
+        try:
+            run = {
+                "run_id": str(uuid4()),
+                "request_id": request_id,
+                "source_type": source_type,
+                "source_label": source_label,
+                "email": email,
+                "created_at": now(),
+                "finished_at": None,
+                "processing_status": "RUNNING",
+                "needs_review": True,
+                "document_count": len(inputs),
+                "pipeline_version": "rules-1",
+                "audit_version": 2,
+                "issues": [],
+                "documents": [],
+            }
+            for source in inputs:
+                run["documents"].append(
+                    {
+                        "document_id": str(uuid4()),
+                        "filename": PureWindowsPath(source.filename).name,
+                        "expected_role": source.expected_role,
+                        "content_sha256": None,
+                        "byte_count": None,
+                        "has_original": False,
+                        "processing_status": "PENDING",
+                        "result": None,
+                        "events": [],
+                        "source_units": [],
+                        "error": None,
+                        "last_completed_stage": None,
                     }
+                )
+            self.store.create(
+                run,
+                [
+                    event(
+                        "run",
+                        "STARTED",
+                        "Extraction run created.",
+                        source_type=source_type,
+                        document_count=len(inputs),
+                    )
+                ],
+            )
+            # Uploaded bytes must outlive their request before acceptance is returned.
+            if source_type == "upload":
+                self._read(run, run["documents"][0], inputs[0], start)
+            initial = self.store.get(run["run_id"])
+            future = self.executor.submit(self._execute, run, inputs, start)
+            submitted = True
+            future.add_done_callback(lambda _: self.capacity.release())
+        except Exception:
+            if run is not None:
+                self._fail(run, "AUDIT_SAVE_FAILED", "The run could not be accepted safely.")
+            raise
+        finally:
+            if not submitted:
+                self.capacity.release()
+        return future.result() if wait else initial
+
+    def _record(self, run, document, stage, status, message, start, **details):
+        record = event(stage, status, message, **details)
+        record["elapsed_ms"] = round((perf_counter() - start) * 1000, 3)
+        record["document_id"] = document["document_id"] if document else None
+        self.store.save(run, [record])
+
+    def _read(self, run, document, source, start):
+        if document["has_original"]:
+            return self.store.original(run["run_id"], document["document_id"])["content"]
+        began = perf_counter()
+        self._record(
+            run, document, "attachment_read", "STARTED", "Reading attachment bytes.", start
+        )
+        content = source.read()
+        if len(content) > source.max_file_bytes:
+            raise DatasetError("RESOURCE_LIMIT", "The attachment exceeds the document size limit.")
+        document.update(
+            content_sha256=sha256(content).hexdigest(), byte_count=len(content), has_original=True
+        )
+        record = event(
+            "original_storage",
+            "SUCCEEDED",
+            "Original attachment retained.",
+            content_sha256=document["content_sha256"],
+            byte_count=len(content),
+            duration_ms=round((perf_counter() - began) * 1000, 3),
+        )
+        record.update(
+            document_id=document["document_id"],
+            elapsed_ms=round((perf_counter() - start) * 1000, 3),
+        )
+        self.store.save(
+            run,
+            [record],
+            (
+                run["run_id"],
+                document["document_id"],
+                document["filename"],
+                content,
+            ),
+        )
+        return content
+
+    def _observe(self, run, document, item):
+        item = {**item, "details": dict(item["details"]), "document_id": document["document_id"]}
+        units = item["details"].pop("source_units", None)
+        if units is not None:
+            units = [SourceUnit.model_validate(unit).model_dump(mode="json") for unit in units]
+            if any(unit["document_id"] != document["document_id"] for unit in units):
+                raise ValueError("Worker returned foreign source units")
+            document["source_units"] = units
+        available = {u["unit_id"] for u in document["source_units"]}
+        refs = list(item["details"].get("source_unit_ids", []))
+        for candidate in item["details"].get("candidates", []):
+            refs.extend(candidate.get("source_unit_ids", []))
+        if not set(refs) <= available:
+            raise ValueError("Worker returned unavailable evidence")
+        if item["status"] in {"SUCCEEDED", "NEEDS_REVIEW"}:
+            document["last_completed_stage"] = item["stage"]
+        self.store.save(run, [item])
+
+    def _execute(self, run, inputs, start):
+        try:
+            for source, document in zip(inputs, run["documents"], strict=True):
+                if self.stopping.is_set():
+                    break
+                began = perf_counter()
+                document["processing_status"] = "RUNNING"
+                self._record(
+                    run, document, "document", "STARTED", "Attachment processing started.", start
+                )
+                try:
+                    remaining = self.settings.dev_run_timeout - (perf_counter() - start)
+                    if remaining <= 0:
+                        raise DatasetError(
+                            "RUN_TIMEOUT", "The run time limit was reached before this attachment."
+                        )
+                    content = self._read(run, document, source, start)
+                    remaining = self.settings.dev_run_timeout - (perf_counter() - start)
+                    if remaining <= 0:
+                        raise DatasetError(
+                            "RUN_TIMEOUT", "The run time limit was reached before extraction."
+                        )
+                    result, _, error = run_worker(
+                        content,
+                        document,
+                        min(self.settings.dev_document_timeout, remaining),
+                        source.max_file_bytes,
+                        lambda item: self._observe(run, document, item),
+                        self.stopping,
+                    )
+                    document.update(result=result, error=error)
+                    document["processing_status"] = (
+                        "FAILED"
+                        if error or result["parsing_status"] in {"FAILED", "REJECTED"}
+                        else "SUCCEEDED"
+                    )
+                except (DatasetError, OSError) as exc:
+                    document.update(
+                        processing_status="FAILED",
+                        error={
+                            "code": getattr(exc, "code", "ATTACHMENT_UNAVAILABLE"),
+                            "message": getattr(exc, "message", "The attachment could not be read."),
+                        },
+                    )
+                document["elapsed_ms"] = round((perf_counter() - began) * 1000, 3)
+                if document["error"] and document["error"]["code"] == "RUN_INTERRUPTED":
+                    document["processing_status"] = "INTERRUPTED"
+                self._record(
+                    run,
+                    document,
+                    "document",
+                    document["processing_status"],
+                    document["error"]["message"]
+                    if document["error"]
+                    else "Attachment processing finished.",
+                    start,
+                    code=document["error"]["code"] if document["error"] else None,
+                    duration_ms=document["elapsed_ms"],
+                    needs_review=bool(document["error"] or document["result"]["needs_review"]),
+                )
+            if self.stopping.is_set():
+                interrupt(run, "The backend stopped before this run finished.")
+            else:
+                if not inputs:
+                    run["issues"].append({"code": "NO_ATTACHMENTS", "message": "No attachments."})
+                    self._record(
+                        run,
+                        None,
+                        "attachments",
+                        "NEEDS_REVIEW",
+                        "No attachments were listed for this email.",
+                        start,
+                    )
+                run["processing_status"] = (
+                    "FAILED"
+                    if any(d["processing_status"] == "FAILED" for d in run["documents"])
                     else "SUCCEEDED"
                 )
-            except (DatasetError, OSError) as exc:
-                document["processing_status"] = "FAILED"
-                document["error"] = {
-                    "code": getattr(exc, "code", "ATTACHMENT_UNAVAILABLE"),
-                    "message": getattr(exc, "message", "The attachment could not be read."),
-                }
-            if document["error"]:
-                events = document["events"]
-                events.append(
-                    {
-                        "sequence": len(events) + 1,
-                        "timestamp": now(),
-                        "elapsed_ms": round((perf_counter() - document_started) * 1000, 3),
-                        "stage": "processing",
-                        "status": "FAILED",
-                        "message": document["error"]["message"],
-                        "details": {"code": document["error"]["code"]},
-                    }
+                run["needs_review"] = bool(run["issues"]) or any(
+                    d["error"] or d["result"] is None or d["result"]["needs_review"]
+                    for d in run["documents"]
                 )
-            completed_stages = [
-                e["stage"]
-                for e in document["events"]
-                if e["status"] in {"SUCCEEDED", "NEEDS_REVIEW"}
-            ]
-            document["last_completed_stage"] = completed_stages[-1] if completed_stages else None
-            document["elapsed_ms"] = round((perf_counter() - document_started) * 1000, 3)
-            self.store.save(run)
-        if not inputs:
-            run["issues"].append(
-                {"code": "NO_ATTACHMENTS", "message": "This email has no attachments."}
+                run["finished_at"] = now()
+            run["elapsed_ms"] = round((perf_counter() - start) * 1000, 3)
+            self._record(
+                run,
+                None,
+                "run",
+                run["processing_status"],
+                "Extraction run finished."
+                if run["processing_status"] != "INTERRUPTED"
+                else "Extraction run interrupted.",
+                start,
+                duration_ms=run["elapsed_ms"],
+                needs_review=run["needs_review"],
             )
-        run["processing_status"] = (
-            "FAILED"
-            if any(d["processing_status"] == "FAILED" for d in run["documents"])
-            else "SUCCEEDED"
+            return self.store.get(run["run_id"])
+        except sqlite3.Error:
+            self._fail(run, "AUDIT_SAVE_FAILED", "Audit recording failed; extraction stopped.")
+            raise
+        except Exception:
+            self._fail(run, "PROCESSING_FAILED", "Extraction stopped unexpectedly.")
+            return self.store.get(run["run_id"])
+
+    def _fail(self, run, code, message):
+        with self.lock:
+            self.recording_failures.add(run["run_id"])
+        logger.error(
+            "extraction_failed run_id=%s request_id=%s code=%s",
+            run["run_id"],
+            run["request_id"],
+            code,
         )
-        run["needs_review"] = bool(run["issues"]) or any(
-            d["error"] or d["result"] is None or d["result"]["needs_review"]
-            for d in run["documents"]
-        )
-        run["finished_at"] = now()
-        run["elapsed_ms"] = round((perf_counter() - start) * 1000, 3)
-        self.store.save(run)
-        return run
+        try:
+            saved = self.store.get(run["run_id"])
+            if saved is None:
+                return
+            if saved["processing_status"] != "RUNNING":
+                return
+            saved.pop("events", None)
+            for document in saved["documents"]:
+                document["events"] = []
+                if document["processing_status"] in {"PENDING", "RUNNING"}:
+                    document.update(
+                        processing_status="FAILED", error={"code": code, "message": message}
+                    )
+            saved.update(processing_status="FAILED", needs_review=True, finished_at=now())
+            saved["issues"].append({"code": code, "message": message})
+            self.store.save(saved, [event("run", "FAILED", message, code=code)])
+            with self.lock:
+                self.recording_failures.discard(run["run_id"])
+        except sqlite3.Error:
+            pass

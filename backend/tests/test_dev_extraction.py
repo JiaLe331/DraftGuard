@@ -175,6 +175,10 @@ def test_disabled_routes_and_health(settings, environment, enabled):
     with TestClient(create_app(settings)) as client:
         assert client.post("/api/v1/dev/extract").status_code == 404
         assert client.get("/api/v1/dev/runs").status_code == 404
+        assert (
+            client.get("/api/v1/dev/runs/00000000-0000-0000-0000-000000000000/events").status_code
+            == 404
+        )
         assert not client.get("/api/health").json()["capabilities"]["development_extraction"]
     assert not settings.dev_audit_db.exists()
 
@@ -247,7 +251,7 @@ def test_failed_save_is_visible_and_interrupted_run_survives(settings, monkeypat
             patch.setattr(
                 application.state.audit_store,
                 "save",
-                lambda _: (_ for _ in ()).throw(sqlite3.OperationalError()),
+                lambda *args, **kwargs: (_ for _ in ()).throw(sqlite3.OperationalError()),
             )
             failed = upload(client)
             assert failed.status_code == 503

@@ -90,7 +90,7 @@ uv run --frozen ruff format --check .
 uv run --frozen pytest
 ```
 
-GitHub Actions runs these checks with frozen lockfiles and no cloud credentials. Frontend tests cover review safety, version transitions, persistence, and user journeys. Backend tests cover the health response without provider configuration and allowed-origin behavior. The frontend production build is written to `frontend/dist/`.
+Run these checks locally; no cloud credentials are required. Frontend tests cover review safety, version transitions, persistence, and user journeys. Backend tests cover the health response without provider configuration and allowed-origin behavior. The frontend production build is written to `frontend/dist/`.
 
 ## Repository layout
 
@@ -98,11 +98,10 @@ GitHub Actions runs these checks with frozen lockfiles and no cloud credentials.
 - `backend/app/`: FastAPI entrypoint, environment configuration, and HTTP routes
 - `backend/tests/`: backend smoke tests
 - `docs/`: existing product requirements and historical scope confirmation
-- `.github/workflows/`: continuous integration
 
 ## Current scope
 
-Implemented: Overview, Inbox, seven-field workspace, sample evidence, local review editing, scan-candidate confirmation, revision demonstrations, completion checks, printable reports, environment templates, dependency locks, and CI checks.
+Implemented: Overview, Inbox, seven-field workspace, sample evidence, local review editing, scan-candidate confirmation, revision demonstrations, completion checks, printable reports, environment templates, dependency locks, and local quality checks.
 
 Not implemented: actual email connection, file upload, parsing, AI extraction, external evidence verification, private cloud storage, or deployment. The PRD's real-data deployment gate is still outstanding. UI sample labels and timestamps must not be presented as live processing results. The health API remains available separately at `/api/health`.
 

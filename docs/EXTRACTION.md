@@ -45,9 +45,22 @@ PDF** or download the original. Browser support determines whether PDF viewing i
 
 **History:** reopen any saved run, including after refreshing or restarting the
 backend. Click a field's evidence to select its retained source unit. Use the
-attachment buttons to switch documents. Expand **Processing audit** steps for
-labels, candidates, selection decisions, normalization, and review reasons.
+attachment buttons to switch documents. Select **View live audit** while processing
+or **View audit trail** afterward to open the separate Audit Trail page.
 **Download audit JSON** exports the complete saved run; originals download separately.
+
+**Audit Trail:** open the main sidebar link or `/audit`. Search by email ID, subject,
+filename, or run ID; filter by source, outcome, or review requirement. Open a run to
+inspect its ordered timeline. Filter by attachment, stage, outcome, or field, expand
+an event, and click a page/cell/line reference to see the retained source text.
+Timestamps include milliseconds in your local timezone; event JSON retains UTC.
+Selections and filters are saved in the URL.
+
+The frontend starts runs asynchronously and opens results immediately. Active
+results and events refresh every second while visible; the audit list refreshes
+every five seconds. Navigating away or refreshing does not cancel a saved run.
+Completed runs stop polling. Connection failures retain the last displayed snapshot.
+Extraction History remains a quick route to saved results and their audits.
 
 Try `email_055` for XLSX/DOCX evidence and the SI's `MISSING_WEIGHT_UNIT` issue;
 try `email_516` for a missing SI weight which remains missing despite the BL value.
@@ -57,8 +70,8 @@ attachments can save an explicit **No attachments** result.
 Extraction finished means the processing completed. **Needs review** means one or
 more values remain unresolved; **Finished with errors** means at least one attachment
 failed or timed out. These are extraction states, not shipment approval or match states.
-Rerunning creates another record. **Reset demo** affects only the sample workspace,
-never this local history.
+Rerunning creates another record. Local extraction history is separate from the
+imported mailbox and its Analyze / Reanalyze results.
 
 ## Development configuration and storage
 
@@ -87,7 +100,10 @@ Vite. For direct cross-origin API calls, add the frontend origin to `ALLOWED_ORI
 
 SQLite stores run metadata, the email snapshot, exact original bytes and SHA-256,
 the unchanged extraction result (including source units), and ordered timestamped
-events. Finished runs are immutable through this service. History belongs to the
+events in an append-only table. Each event is committed as it arrives from the
+worker; parsed source units are saved before events reference them. The final
+results, completion event, and terminal status commit together. Finished runs and
+events are immutable through this service. History belongs to the
 local backend and is shared by its callers; it is not authenticated or tamper-proof
 production storage. Keep the documented server bound to localhost and run only one
 backend process against a given audit database. On startup, unfinished runs become
@@ -95,10 +111,23 @@ backend process against a given audit database. On startup, unfinished runs beco
 already saved in an interrupted run remain available. The database, including SQLite
 sidecar files under `.local/`, is ignored by Git.
 
+Startup migrates existing history automatically and idempotently. Earlier run
+payloads and original bytes stay unchanged. Their real recorded events are imported
+and labeled **Legacy trace**; missing historical lifecycle events are not invented.
+The audit is operational development history, not an authenticated production ledger.
+
+At most two runs may process concurrently, with no waiting queue. Additional
+submissions receive retryable HTTP 503 `EXTRACTION_BUSY`. Both synchronous and
+asynchronous callers share this limit. The application owns the background threads;
+no Redis, Celery, external queue, or additional service is required.
+
 Each document runs in a separate worker process. A timeout kills that worker,
 retains its emitted events and any earlier completed attachments, and records an
 error. A history write failure returns `AUDIT_SAVE_FAILED` instead of claiming the
-run was saved. Document content stays in results/audit records, not application logs.
+run was saved. After asynchronous acceptance, a recording failure stops the run;
+reads surface that error until its failure can be persisted or restart recovery
+marks it interrupted. Graceful shutdown terminates active workers and records
+interruption where storage is available. Document content stays in results/audit records, not application logs.
 The startup command disables access logs so inbox search text is not logged in URLs.
 
 ## Development API and integration
@@ -112,9 +141,24 @@ Interactive request forms are at [API docs](http://127.0.0.1:8000/docs).
 | `GET /api/v1/dev/emails?q=004&has_attachments=true&limit=20&offset=0` | Filtered, paginated inbox; `has_attachments=false` includes all emails |
 | `GET /api/v1/dev/emails/{email_id}` | Email body and declared attachment paths |
 | `POST /api/v1/dev/emails/{email_id}/extract` | One saved run covering all attachments independently |
-| `GET /api/v1/dev/runs?limit=20&offset=0` | Newest runs first |
+| `GET /api/v1/dev/runs?limit=20&offset=0` | Newest runs first; optional `q`, `status`, `source_type`, and `needs_review` filters |
+| `GET /api/v1/dev/runs/{run_id}/events?after_sequence=0&limit=100` | Ordered event page, continuation cursor, terminal status, and live/legacy trace mode |
 | `GET /api/v1/dev/runs/{run_id}` | Full saved run, documents, extraction results, and events; `?download=true` downloads the audit JSON |
 | `GET /api/v1/dev/runs/{run_id}/documents/{document_id}/original` | Exact original; `?disposition=inline` allows validated PDFs inline |
+
+Both POST extraction endpoints accept `?wait=false`: HTTP 202 returns the saved
+initial run (including `run_id`) once processing has been scheduled. Uploaded bytes
+are persisted before acceptance. Omit `wait` to retain synchronous HTTP 200 behavior.
+The standalone extractor and final extraction result contract are unchanged.
+
+The events endpoint returns `items`, `next_after_sequence`, `has_more`,
+`processing_status`, and `trace_mode`. Request the next page with the returned cursor;
+read all remaining pages before stopping when the run becomes terminal. `limit`
+defaults to 100 and accepts 1–500; the cursor must be nonnegative. Sequences are
+ordered across the entire run, not restarted per attachment. Events include run,
+request, and document identities, timestamp, stage, outcome, message, structured
+details, and measured duration where available. The `events` array on new full run
+responses contains the same complete timeline; document event arrays remain available.
 
 Request errors use `{ "error": { "code", "message", "retryable", "request_id" } }`
 and an appropriate non-2xx status. Saved attempts return HTTP 200 even when an
@@ -131,24 +175,32 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/dev/emails/email_004
 Invoke-RestMethod http://127.0.0.1:8000/api/v1/dev/runs
 ```
 
+To start a background dataset run and retrieve its first event page:
+
+```powershell
+$run = Invoke-RestMethod -Method Post 'http://127.0.0.1:8000/api/v1/dev/emails/email_004/extract?wait=false'
+Invoke-RestMethod "http://127.0.0.1:8000/api/v1/dev/runs/$($run.run_id)/events?after_sequence=0&limit=100"
+```
+
 A frontend can call the Vite proxy directly. Let the browser set the multipart boundary:
 
 ```typescript
 const form = new FormData()
 form.append('file', file)
 form.append('expected_role', 'SI') // Optional; content still determines the role.
-const response = await fetch('/api/v1/dev/extract', { method: 'POST', body: form })
+const response = await fetch('/api/v1/dev/extract?wait=false', { method: 'POST', body: form })
 const payload = await response.json()
 if (!response.ok) throw new Error(payload.error.message)
-// payload.run_id, payload.documents[i].result, payload.documents[i].events
+// HTTP 202: save payload.run_id and poll the run and events endpoints.
+// A result may still be null until its attachment finishes processing.
 ```
 
 `app.dev_extraction.service.RunService.run(...)` is the shared processing entry
 point. Both adapters pass `DocumentInput(filename, read, expected_role, max_file_bytes)`
 objects plus `source_type`, `source_label`, an optional email snapshot, and request ID.
 A future email importer can supply attachment bytes through these readers and reuse
-the worker/persistence pipeline. It should run this synchronous service in a worker
-thread or job. `extract_document(...)` below remains independently importable and
+the worker/persistence pipeline. Pass `wait=False` for background processing, or
+use its default `wait=True` from a worker thread for synchronous integration. `extract_document(...)` below remains independently importable and
 does not write history. Its optional `observer` callback receives real processing
 events; the API worker uses that callback to record the audit.
 

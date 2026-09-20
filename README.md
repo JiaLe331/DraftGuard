@@ -120,10 +120,21 @@ restart the backend. Open <http://127.0.0.1:5173/extraction>:
 
 - **Dataset inbox:** select `email_004` and click **Extract attachments** to process both listed files automatically. The default bundle is the sibling `sdoc-hackathon-bundle`; override with `DATASET_DIR` if needed.
 - **Upload a document:** choose `backend/tests/fixtures/extraction/email_160_SI.pdf` to inspect seven fields, page evidence, and the original PDF.
+- **Audit Trail:** open `/audit` from the sidebar for live backend steps, source evidence, selection decisions, review reasons, and failures. Extraction results include a direct link to their audit. Processing continues through navigation and refresh.
 - **History:** reopen saved runs and download the full audit JSON. History survives backend restarts in `backend/.local/extraction-audit.sqlite3` (override with `DEV_AUDIT_DB`). This history is separate from imported mailbox analysis.
+
+The Inbox's **Analyze / Reanalyze** action uses `app.documents.analysis` for email
+classification, field extraction, and SI/BL comparison. The **Extraction** page uses
+`app.extraction.extract_document` for independent document extraction and live
+auditing. Their rules and stored runs are separate, so results can differ. Audit
+Trail currently covers only runs started through the local extraction service;
+mailbox analysis does not publish events there.
 
 The routes are unavailable in production or when the feature flag is off. Development
 history is shared by callers of the local backend. Each rerun creates a new record.
+Two runs may process simultaneously; further submissions receive a retryable busy
+response. Run only one backend process per audit database. Existing history migrates
+automatically and appears as Legacy trace, with original results and files preserved.
 See [the extraction setup guide](docs/EXTRACTION.md) for API requests, configuration,
 review states, resource limits, and frontend integration examples.
 

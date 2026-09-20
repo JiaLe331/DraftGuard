@@ -8,7 +8,6 @@ import {
   ArrowUpRightIcon,
   ShieldCheckIcon,
   XIcon,
-  FileSearchIcon,
   ListMagnifyingGlassIcon,
 } from '@phosphor-icons/react'
 import { useMailbox } from '../mailbox/context'
@@ -25,7 +24,9 @@ export function Shell() {
   const searchRef = useRef<HTMLInputElement>(null)
   const routeKey = location.pathname + location.search
   const isExtraction =
-    location.pathname.startsWith('/extraction') || location.pathname.startsWith('/audit')
+    location.pathname === '/inbox/upload' ||
+    location.pathname.startsWith('/extraction') ||
+    location.pathname.startsWith('/audit')
   useEffect(() => {
     const controller = new AbortController()
     requestJson<Health>('/api/health', { signal: controller.signal })
@@ -131,7 +132,13 @@ export function Shell() {
                 : '—'}
             </span>
           </NavLink>
-          <NavLink to="/inbox" onClick={() => setMenuOpen(false)}>
+          <NavLink
+            to="/inbox"
+            className={({ isActive }) =>
+              isActive || location.pathname.startsWith('/extraction/runs/') ? 'active' : ''
+            }
+            onClick={() => setMenuOpen(false)}
+          >
             <TrayIcon size={21} />
             <span>Inbox</span>
             <span className="nav-count muted">{summary?.total ?? '—'}</span>
@@ -140,12 +147,6 @@ export function Shell() {
             <NavLink to="/audit" onClick={() => setMenuOpen(false)}>
               <ListMagnifyingGlassIcon size={21} />
               <span>Audit Trail</span>
-            </NavLink>
-          )}
-          {extractionEnabled && (
-            <NavLink to="/extraction" onClick={() => setMenuOpen(false)}>
-              <FileSearchIcon size={21} />
-              <span>Extraction</span>
             </NavLink>
           )}
         </nav>

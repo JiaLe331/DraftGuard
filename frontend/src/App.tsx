@@ -9,6 +9,9 @@ const Workspace = lazy(() =>
 const Extraction = lazy(() =>
   import('./pages/Extraction').then((module) => ({ default: module.Extraction })),
 )
+const LegacyExtractionRedirect = lazy(() =>
+  import('./pages/Extraction').then((module) => ({ default: module.LegacyExtractionRedirect })),
+)
 const Audit = lazy(() => import('./pages/Audit').then((module) => ({ default: module.Audit })))
 
 const router = createBrowserRouter([
@@ -41,7 +44,15 @@ const router = createBrowserRouter([
           </Suspense>
         ),
       })),
-      ...['/extraction', '/extraction/runs/:runId'].map((path) => ({
+      {
+        path: '/extraction',
+        element: (
+          <Suspense>
+            <LegacyExtractionRedirect />
+          </Suspense>
+        ),
+      },
+      ...['/inbox/upload', '/extraction/runs/:runId'].map((path) => ({
         path,
         element: (
           <Suspense

@@ -6,8 +6,10 @@ import {
   ClockIcon,
   ClipboardTextIcon,
   TrayIcon,
+  FileArrowUpIcon,
 } from '@phosphor-icons/react'
 import { useResource } from '../mailbox/api'
+import type { Health } from '../extraction/api'
 import { useMailbox } from '../mailbox/context'
 import {
   analyzedAt,
@@ -91,9 +93,13 @@ export function Overview({ inbox = false }: { inbox?: boolean }) {
               : 'Source-backed results. A clear next step for every document check.'}
           </p>
         </div>
-        <div className="page-date">
-          Demo mailbox<span>Provided dataset</span>
-        </div>
+        {inbox ? (
+          <UploadLink from={from} />
+        ) : (
+          <div className="page-date">
+            Demo mailbox<span>Provided dataset</span>
+          </div>
+        )}
       </div>
       {!inbox && (
         <div className="stats-grid">
@@ -313,5 +319,15 @@ export function Overview({ inbox = false }: { inbox?: boolean }) {
         <span>Rule analysis · Saved locally · No Gmail connection</span>
       </div>
     </div>
+  )
+}
+
+function UploadLink({ from }: { from: string }) {
+  const { data } = useResource<Health>('/api/health')
+  if (!data?.capabilities?.development_extraction) return null
+  return (
+    <Link className="button primary" to={`/inbox/upload?from=${encodeURIComponent(from)}`}>
+      <FileArrowUpIcon size={18} aria-hidden="true" /> Upload document
+    </Link>
   )
 }

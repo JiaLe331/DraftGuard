@@ -23,10 +23,26 @@ export function pageOffset(value: string | null) {
   return Number.isSafeInteger(offset) && offset >= 0 ? offset : 0
 }
 
-export function runPath(runId: string, search: string) {
-  return `/extraction/runs/${encodeURIComponent(runId)}?from=${encodeURIComponent(`/extraction${search}`)}`
+export function runPath(runId: string, from: string) {
+  return `/extraction/runs/${encodeURIComponent(runId)}?from=${encodeURIComponent(returnPath(from))}`
+}
+
+export function legacyExtractionPath(search: string) {
+  const params = new URLSearchParams(search)
+  if (params.get('section') === 'upload') return '/inbox/upload'
+  if (params.get('section') === 'history') {
+    const offset = pageOffset(params.get('history_offset'))
+    return offset ? `/audit?offset=${offset}` : '/audit'
+  }
+  const query = params.get('q') || params.get('email')
+  return query ? `/inbox?${new URLSearchParams({ q: query })}` : '/inbox'
 }
 
 export function returnPath(from: string | null) {
-  return from === '/extraction' || from?.startsWith('/extraction?') ? from : '/extraction'
+  if (from === '/inbox' || from?.startsWith('/inbox?')) return from
+  if (from === '/extraction' || from?.startsWith('/extraction?')) {
+    const destination = legacyExtractionPath(from.slice('/extraction'.length))
+    return destination.startsWith('/inbox?') ? destination : '/inbox'
+  }
+  return '/inbox'
 }

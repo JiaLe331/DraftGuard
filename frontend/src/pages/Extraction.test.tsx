@@ -1,8 +1,11 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Extraction } from './Extraction'
+import { Extraction, LegacyExtractionRedirect } from './Extraction'
+import { Shell } from '../components/Shell'
+import { MailboxProvider } from '../mailbox/provider'
+import { Overview } from './Overview'
 import type { ExtractionRun, ExtractedDocument, Locator } from '../extraction/api'
 
 const email = {
@@ -107,7 +110,7 @@ const response = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } })
 
 function setup(
-  path = '/extraction',
+  path = '/inbox',
   override?: (path: string, init?: RequestInit) => Promise<Response> | undefined,
 ) {
   vi.stubGlobal('innerWidth', 1440)
@@ -120,11 +123,16 @@ function setup(
           capabilities: { development_extraction: true, upload_limit_bytes: 3 * 1024 * 1024 },
         }),
       )
-    if (input.startsWith('/api/v1/dev/emails?'))
+    if (input.startsWith('/api/v1/samples?'))
       return Promise.resolve(
-        response({ items: [{ ...email, attachment_count: 2 }], total: 1, dataset_total: 520 }),
+        response({
+          items: [],
+          total: 0,
+          page: 1,
+          limit: 50,
+          summary: { total: 0, attachments: 0, states: {} },
+        }),
       )
-    if (input === '/api/v1/dev/emails/email_004') return Promise.resolve(response(email))
     if (input === '/api/v1/dev/runs/run-1') return Promise.resolve(response(run))
     if (input.startsWith('/api/v1/dev/runs?'))
       return Promise.resolve(response({ items: [run], total: 1 }))
@@ -134,12 +142,24 @@ function setup(
   vi.stubGlobal('fetch', fetchMock)
   const router = createMemoryRouter(
     [
-      { path: '/extraction', element: <Extraction /> },
-      { path: '/extraction/runs/:runId', element: <Extraction /> },
+      {
+        element: <Shell />,
+        children: [
+          { path: '/inbox', element: <Overview inbox /> },
+          { path: '/inbox/upload', element: <Extraction /> },
+          { path: '/audit', element: <h1>Saved audit history</h1> },
+          { path: '/extraction', element: <LegacyExtractionRedirect /> },
+          { path: '/extraction/runs/:runId', element: <Extraction /> },
+        ],
+      },
     ],
     { initialEntries: [path] },
   )
-  render(<RouterProvider router={router} />)
+  render(
+    <MailboxProvider>
+      <RouterProvider router={router} />
+    </MailboxProvider>,
+  )
   return { fetchMock, router }
 }
 
@@ -167,29 +187,43 @@ it('shows retained mailbox attachments as skipped when comparison was not reques
 })
 
 describe('local extraction journeys', () => {
-  it('opens an email without processing, then extracts all attachments in one request', async () => {
+  it('offers uploads from Inbox and removes the Extraction sidebar entry', async () => {
     const { fetchMock } = setup()
-    await userEvent.click(await screen.findByRole('button', { name: /email_004/ }))
-    expect(await screen.findByText(email.body)).toBeInTheDocument()
+    await screen.findByRole('link', { name: 'Upload document' })
+    const navigation = screen.getByRole('complementary', { name: 'Main navigation' })
+    expect(within(navigation).queryByRole('link', { name: 'Extraction' })).not.toBeInTheDocument()
+    expect(within(navigation).getByRole('link', { name: 'Audit Trail' })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('link', { name: 'Upload document' }))
+    expect(await screen.findByLabelText('Document')).toBeInTheDocument()
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
-    await userEvent.click(screen.getByRole('button', { name: 'Extract attachments' }))
-    const tabs = await screen.findByRole('navigation', { name: 'Attachments' })
-    expect(within(tabs).getAllByRole('button')).toHaveLength(2)
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/dev/emails/email_004/extract?wait=false', {
-      method: 'POST',
-    })
+  })
+
+  it.each([
+    ['/extraction', '/inbox'],
+    ['/extraction?q=email_004&all=true', '/inbox?q=email_004'],
+    ['/extraction?email=email_055', '/inbox?q=email_055'],
+    ['/extraction?section=upload', '/inbox/upload'],
+    ['/extraction?section=history', '/audit'],
+    ['/extraction?section=history&history_offset=20', '/audit?offset=20'],
+  ])('redirects the old bookmark %s without starting processing', async (oldPath, destination) => {
+    const { router, fetchMock } = setup(oldPath)
+    await waitFor(() =>
+      expect(router.state.location.pathname + router.state.location.search).toBe(destination),
+    )
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+    expect(fetchMock.mock.calls.some(([path]) => path.startsWith('/api/v1/dev/emails'))).toBe(false)
   })
 
   it('sends the file and expected role as multipart data and blocks duplicate submission', async () => {
     let finish!: (value: Response) => void
-    const { fetchMock } = setup('/extraction', (path) =>
+    const { fetchMock } = setup('/inbox/upload', (path) =>
       path === '/api/v1/dev/extract?wait=false'
         ? new Promise((resolve) => {
             finish = resolve
           })
         : undefined,
     )
-    await userEvent.click(await screen.findByRole('button', { name: 'Upload a document' }))
+    await screen.findByLabelText('Document')
     const file = new File(['SHIPPING INSTRUCTION'], 'source.txt', { type: 'text/plain' })
     await userEvent.upload(screen.getByLabelText('Document'), file)
     await userEvent.selectOptions(screen.getByLabelText('Expected document role'), 'SI')
@@ -222,9 +256,7 @@ describe('local extraction journeys', () => {
   })
 
   it('reopens saved history without starting another extraction', async () => {
-    const { fetchMock } = setup()
-    await userEvent.click(await screen.findByRole('button', { name: 'History' }))
-    await userEvent.click(await screen.findByRole('link', { name: /Shipment instructions/ }))
+    const { fetchMock } = setup('/extraction/runs/run-1')
     expect(await screen.findByRole('link', { name: 'Download audit JSON' })).toHaveAttribute(
       'href',
       '/api/v1/dev/runs/run-1?download=true',
@@ -233,8 +265,8 @@ describe('local extraction journeys', () => {
   })
 
   it('shows a failed save and restores the submit button', async () => {
-    setup('/extraction', (path) =>
-      path === '/api/v1/dev/emails/email_004/extract?wait=false'
+    setup('/inbox/upload', (path) =>
+      path === '/api/v1/dev/extract?wait=false'
         ? Promise.resolve(
             response(
               {
@@ -249,47 +281,52 @@ describe('local extraction journeys', () => {
           )
         : undefined,
     )
-    await userEvent.click(await screen.findByRole('button', { name: /email_004/ }))
-    await userEvent.click(await screen.findByRole('button', { name: 'Extract attachments' }))
+    await userEvent.upload(
+      await screen.findByLabelText('Document'),
+      new File(['SI'], 'source.txt', { type: 'text/plain' }),
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Extract document' }))
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Local history could not be saved. Request: req-failed',
     )
-    expect(screen.getByRole('button', { name: 'Extract attachments' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Extract document' })).toBeEnabled()
     expect(screen.queryByText('Extraction finished')).not.toBeInTheDocument()
   })
 
-  it('searches the dataset and allows emails without attachments', async () => {
-    const { fetchMock } = setup()
-    const search = await screen.findByRole('textbox', { name: 'Search emails' })
-    fireEvent.change(search, { target: { value: 'email_055' } })
-    await userEvent.click(screen.getByRole('button', { name: 'Search' }))
-    await userEvent.click(screen.getByRole('checkbox', { name: 'With attachments only' }))
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/v1/dev/emails?q=email_055&has_attachments=false&limit=20&offset=0',
-        expect.any(Object),
-      ),
-    )
-  })
-
   it('does not access development routes when the feature is disabled', async () => {
-    const { fetchMock } = setup('/extraction', (path) =>
+    const { fetchMock } = setup('/inbox/upload', (path) =>
       path === '/api/health'
         ? Promise.resolve(response({ capabilities: { development_extraction: false } }))
         : undefined,
     )
     expect(await screen.findByText(/Local extraction is disabled/)).toBeInTheDocument()
-    expect(fetchMock.mock.calls.every(([path]) => path === '/api/health')).toBe(true)
+    expect(fetchMock.mock.calls.some(([path]) => path.startsWith('/api/v1/dev/'))).toBe(false)
   })
 
-  it('returns to the selected email and filters after inspecting a run', async () => {
-    const { router } = setup('/extraction?q=email_004&all=true&email=email_004')
-    expect(await screen.findByRole('textbox', { name: 'Search emails' })).toHaveValue('email_004')
-    await userEvent.click(await screen.findByRole('button', { name: 'Extract attachments' }))
-    await userEvent.click(await screen.findByRole('link', { name: 'Back to extraction' }))
-    expect(router.state.location.search).toBe('?q=email_004&all=true&email=email_004')
-    expect(await screen.findByText(email.body)).toBeInTheDocument()
-    expect(screen.getByRole('checkbox', { name: 'With attachments only' })).not.toBeChecked()
+  it('returns to the Inbox filters after an upload', async () => {
+    const { router } = setup('/inbox?q=email_004&category=BL_COMPARISON&page=2')
+    await userEvent.click(await screen.findByRole('link', { name: 'Upload document' }))
+    await userEvent.upload(
+      await screen.findByLabelText('Document'),
+      new File(['SI'], 'source.txt', { type: 'text/plain' }),
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Extract document' }))
+    await screen.findByRole('heading', { name: 'Extracted fields' })
+    await userEvent.click(screen.getByRole('link', { name: 'Back to Inbox' }))
+    expect(router.state.location.pathname + router.state.location.search).toBe(
+      '/inbox?q=email_004&category=BL_COMPARISON&page=2',
+    )
+  })
+
+  it('hides upload and audit actions when development extraction is disabled', async () => {
+    setup('/inbox', (path) =>
+      path === '/api/health'
+        ? Promise.resolve(response({ capabilities: { development_extraction: false } }))
+        : undefined,
+    )
+    await screen.findByRole('heading', { name: 'Your dataset has not been imported' })
+    expect(screen.queryByRole('link', { name: 'Upload document' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Audit Trail' })).not.toBeInTheDocument()
   })
 
   it('reopens the document and evidence specified by the URL', async () => {

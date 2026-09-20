@@ -37,7 +37,7 @@ export function RunInspector({ runId }: { runId: string }) {
   return (
     <>
       <Link className="extraction-back" to={returnPath(params.get('from'))}>
-        <ArrowLeftIcon size={18} /> Back to extraction
+        <ArrowLeftIcon size={18} /> Back to Inbox
       </Link>
       {resource.loading && <p role="status">Opening saved extraction…</p>}
       {resource.error && (

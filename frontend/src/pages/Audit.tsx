@@ -204,7 +204,7 @@ function AuditList() {
             <div className="extraction-empty">
               <ListMagnifyingGlassIcon size={36} />
               <p>No runs match these filters.</p>
-              <Link to="/extraction">Open extraction</Link>
+              <Link to="/inbox">Open Inbox</Link>
             </div>
           )}
           <div className="extraction-pagination">

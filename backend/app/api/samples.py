@@ -59,7 +59,7 @@ def build_router(settings: Settings, store: Store) -> APIRouter:
         return run(lambda: store.detail(email_id))
 
     @router.get("/samples/{email_id}/documents/{document_id}/content")
-    def content(email_id: str, document_id: str):
+    def content(email_id: str, document_id: str, download: bool = False):
         doc, path = run(lambda: store.get_document(email_id, document_id))
         media_type = {
             ".pdf": "application/pdf",
@@ -72,7 +72,7 @@ def build_router(settings: Settings, store: Store) -> APIRouter:
             filename=doc["filename"],
             media_type=media_type,
             content_disposition_type="inline"
-            if media_type.startswith(("application/pdf", "text/plain"))
+            if not download and media_type.startswith(("application/pdf", "text/plain"))
             else "attachment",
             headers={
                 "X-Content-Type-Options": "nosniff",

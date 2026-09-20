@@ -104,7 +104,11 @@ def test_api_pagination_search_global_counts_content_and_production_gate(tmp_pat
         detail = response.json()
         assert detail["workflow_state"] == "READY"
         content = f"/api/v1/samples/email_000/documents/{detail['documents'][0]['id']}/content"
-        assert client.get(content).content == (root / "attachments/email_000_SI.txt").read_bytes()
+        expected = (root / "attachments/email_000_SI.txt").read_bytes()
+        assert client.get(content).content == expected
+        downloaded = client.get(content + "?download=true")
+        assert downloaded.content == expected
+        assert downloaded.headers["content-disposition"].startswith("attachment;")
         assert client.get(content.replace("/email_000/", "/email_001/")).status_code == 404
         assert client.get("/api/v1/samples?limit=9999").status_code == 422
         assert (

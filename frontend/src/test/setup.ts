@@ -15,3 +15,16 @@ HTMLDialogElement.prototype.close = function () {
 }
 
 HTMLElement.prototype.scrollIntoView = function () {}
+
+window.matchMedia = (query: string) => ({
+  matches: false,
+  media: query,
+  onchange: null,
+  addListener() {},
+  removeListener() {},
+  addEventListener() {},
+  removeEventListener() {},
+  dispatchEvent() {
+    return true
+  },
+})

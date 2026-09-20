@@ -1,5 +1,5 @@
 import { Navigate, createBrowserRouter, RouterProvider } from 'react-router'
-import { DemoProvider } from './demo/store'
+import { MailboxProvider } from './mailbox/provider'
 import { Shell } from './components/Shell'
 import { Overview } from './pages/Overview'
 import { lazy, Suspense } from 'react'
@@ -16,7 +16,7 @@ const router = createBrowserRouter([
     errorElement: (
       <div className="page">
         <h1>The workspace could not be opened.</h1>
-        <p>Your saved local data has not been cleared.</p>
+        <p>Your saved analysis remains in the local mailbox.</p>
         <a className="button primary" href="/overview">
           Reload workspace
         </a>
@@ -70,9 +70,9 @@ const router = createBrowserRouter([
 ])
 function App() {
   return (
-    <DemoProvider>
+    <MailboxProvider>
       <RouterProvider router={router} />
-    </DemoProvider>
+    </MailboxProvider>
   )
 }
 export default App

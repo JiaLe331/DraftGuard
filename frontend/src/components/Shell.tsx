@@ -4,23 +4,18 @@ import {
   SquaresFourIcon,
   TrayIcon,
   MagnifyingGlassIcon,
-  ArrowCounterClockwiseIcon,
   ListIcon,
   ArrowUpRightIcon,
   ShieldCheckIcon,
   XIcon,
   FileSearchIcon,
 } from '@phosphor-icons/react'
-import { useDemo } from '../demo/context'
-import { workflow } from '../demo/model'
-import { Dialog } from './Primitives'
+import { useMailbox } from '../mailbox/context'
 import { requestJson, type Health } from '../extraction/api'
 const scrollPositions = new Map<string, number>()
 export function Shell() {
-  const { tasks, warning, reset } = useDemo()
-  const [resetOpen, setResetOpen] = useState(false)
+  const { summary } = useMailbox()
   const [menuOpen, setMenuOpen] = useState(false)
-  const [error, setError] = useState('')
   const [extractionEnabled, setExtractionEnabled] = useState(false)
   const location = useLocation(),
     navigate = useNavigate()
@@ -51,6 +46,7 @@ export function Shell() {
   function search(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const next = new URLSearchParams(location.pathname.startsWith('/tasks/') ? '' : params)
+    next.delete('page')
     const query = searchRef.current?.value.trim() ?? ''
     if (query) next.set('q', query)
     else next.delete('q')
@@ -96,7 +92,7 @@ export function Shell() {
         <div className="header-end">
           <span className="sample-label">
             <span />
-            {isExtraction ? 'Local extraction' : 'Sample data'}
+            {isExtraction ? 'Local extraction' : 'Provided dataset'}
           </span>
           <div className="reviewer-avatar" title="Demo reviewer — unverified">
             D
@@ -126,13 +122,17 @@ export function Shell() {
             <SquaresFourIcon size={21} />
             <span>Overview</span>
             <span className="nav-count">
-              {tasks.filter((t) => workflow(t) === 'attention').length}
+              {summary
+                ? (summary.states.REVIEW_REQUIRED ?? 0) +
+                  (summary.states.DISCREPANCIES_FOUND ?? 0) +
+                  (summary.states.FAILED ?? 0)
+                : '—'}
             </span>
           </NavLink>
           <NavLink to="/inbox" onClick={() => setMenuOpen(false)}>
             <TrayIcon size={21} />
             <span>Inbox</span>
-            <span className="nav-count muted">{tasks.length}</span>
+            <span className="nav-count muted">{summary?.total ?? '—'}</span>
           </NavLink>
           {extractionEnabled && (
             <NavLink to="/extraction" onClick={() => setMenuOpen(false)}>
@@ -150,42 +150,20 @@ export function Shell() {
             <br />a checked draft.
           </strong>
           <p>From incoming email to evidence-backed review.</p>
-          <Link to="/overview?status=attention" onClick={() => setMenuOpen(false)}>
+          <Link to="/overview?status=ATTENTION" onClick={() => setMenuOpen(false)}>
             View your queue <ArrowUpRightIcon size={15} />
           </Link>
         </div>
         <div className="sidebar-bottom">
           <p>
             <span className="local-dot" />
-            {isExtraction ? 'Local extraction' : 'Interactive prototype'}
+            {isExtraction ? 'Local extraction' : 'Local analysis'}
           </p>
           <small>
-            {isExtraction ? (
-              <>
-                Real documents.
-                <br />
-                History saved on the backend.
-              </>
-            ) : (
-              <>
-                Team-authored samples.
-                <br />
-                Changes stay in this browser.
-              </>
-            )}
+            {isExtraction ? 'Extraction history' : 'Demo mailbox'}.
+            <br />
+            Results saved on this backend.
           </small>
-          {!isExtraction && (
-            <button
-              className="reset-button"
-              onClick={() => {
-                setResetOpen(true)
-                setError('')
-              }}
-            >
-              <ArrowCounterClockwiseIcon size={17} />
-              Reset demo
-            </button>
-          )}
         </div>
       </aside>
       <main
@@ -196,42 +174,8 @@ export function Shell() {
         className="main-content"
         onScroll={(event) => scrollPositions.set(routeKey, event.currentTarget.scrollTop)}
       >
-        {warning && !isExtraction && (
-          <div className="notice warning" role="alert">
-            {warning}
-          </div>
-        )}
         <Outlet />
       </main>
-      {resetOpen && (
-        <Dialog title="Reset the demo?" onClose={() => setResetOpen(false)}>
-          <p>This removes your saved local reviews and restores the original sample tasks.</p>
-          {error && (
-            <p className="form-error" role="alert">
-              {error}
-            </p>
-          )}
-          <div className="dialog-actions">
-            <button className="button" onClick={() => setResetOpen(false)}>
-              Cancel
-            </button>
-            <button
-              className="button primary"
-              onClick={() => {
-                try {
-                  reset()
-                  setResetOpen(false)
-                  navigate('/overview')
-                } catch (e) {
-                  setError((e as Error).message)
-                }
-              }}
-            >
-              Reset demo
-            </button>
-          </div>
-        </Dialog>
-      )}
     </div>
   )
 }

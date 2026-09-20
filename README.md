@@ -1,16 +1,16 @@
 # DraftGuard
 
-DraftGuard is an AI-assisted shipping document verification workspace. The repository contains an interactive sample workspace and a working local extraction flow for TXT, PDF, DOCX, and XLSX. The **Local extraction** page supports uploads, supplied dataset emails, source evidence, and saved SQLite audit history.
+DraftGuard turns the organizer's shipping-document dataset into a local demo mailbox. It imports original email JSON and attachments, runs real rule-based classification and seven-field SI / draft-BL comparison, and saves results in SQLite. Overview, Inbox, and the verification workspace use the backend API; no personal Gmail account is connected.
 
-## Requirements
+This is a **local development milestone**. Cloud persistence, Gemini, public deployment, and human review writes are not connected. A match means **Ready for review**, never completed or approved.
 
-- Node.js 24 (also recorded in `.node-version`)
+## Requirements and installation
+
+- Node.js 24 (recorded in `.node-version`)
 - pnpm 11.25.0
-- uv 0.12.16; uv manages Python 3.12 for the backend
+- uv 0.12.16; uv manages Python 3.12
 
-## Setup
-
-Run from the repository root:
+From the repository root:
 
 ```sh
 cd frontend
@@ -22,44 +22,96 @@ uv sync --frozen
 cp .env.example .env
 ```
 
-Environment files are optional for the scaffold: the defaults work without cloud credentials. Keep real secrets in local environment files or platform secret settings.
+Environment files are optional; the development defaults need no cloud credentials. Keep actual secrets out of the repository and browser variables.
 
-## Start development
+## Import and preanalyze the mailbox
 
-In terminal 1, from the repository root:
+The organizer dataset is an external development input, not committed in this repository. Obtain the provided `data_v2` folder, keeping its `inbox/` and `attachments/` structure. In this workspace it is at `../problem-statement/sdoc-hackathon-docker/data_v2` relative to the repository root.
+
+From `backend/`:
+
+```sh
+uv run --frozen python -m app.cli import-dataset \
+  --source ../../problem-statement/sdoc-hackathon-docker/data_v2 --analyze
+```
+
+For another checkout, replace `--source` with the absolute path to the provided dataset. The importer reads **only** inbox JSON and explicitly referenced attachments; it never reads `ground_truth.json`, sample submissions, or generator internals. Expected input: 520 emails and 250 attachments.
+
+- Without `--analyze`, import leaves new records unprocessed.
+- Repeating the command with unchanged input does not duplicate emails, document versions, or successful current runs.
+- Changed email content or attachments advance the source revision; original attachment snapshots and prior runs remain available. Import is an upsert, not a deletion/synchronization command.
+- `--analyze` handles missing results or changed pipeline versions. Add `--rerun` to recompute all records, including unchanged ones.
+- A per-email processing failure is saved and does not stop the batch. The command prints the actual state totals; inconclusive classification and document review requirements are not successful comparisons.
+- Starting the API does not import or analyze the dataset automatically.
+
+The default store is `backend/.local/mailbox.sqlite3` plus content-hashed files under `backend/.local/objects/`. This directory is ignored by Git. No dataset or analysis data is put in the frontend bundle or browser localStorage.
+
+## Team setup and data ownership
+
+Each teammate uses their own copy of the organizer dataset. After installing dependencies, run the import command from `backend/`, supplying your own source directory:
+
+```sh
+uv run --frozen python -m app.cli import-dataset \
+  --source "/absolute/path/to/data_v2" --analyze
+```
+
+The source path is a command argument, not a machine-specific path embedded in application code. Preserve the dataset's `inbox/` and `attachments/` structure. Keep the provided dataset outside the Git checkout; do not commit or force-add it.
+
+Import copies referenced attachments into `backend/.local/objects/` and stores their hashes and metadata in SQLite. Analysis and original-file viewing subsequently read those managed copies, not the original dataset directory. Reimport explicitly to capture changed source files as new revisions.
+
+Cloning or pulling the repository does not transfer the dataset, local database, attachments, or analysis history. Each teammate's local mailbox is independent. The organizer's `loader.py` supports local and HTTP reads, but this milestone uses our validated local importer; no organizer HTTP service is required or connected.
+
+This storage setup is for local development. Before deployment, implement persistent database/object storage, access controls, and session isolation against the PRD. Supabase database and Storage remain planned integrations. A shared data loader alone would not synchronize analysis or future human-review changes between teammates.
+
+## Start development in two terminals
+
+Terminal 1, from the repository root:
 
 ```sh
 cd backend
 uv run --frozen uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --no-access-log
 ```
 
-In terminal 2, from the repository root:
+Terminal 2:
 
 ```sh
 cd frontend
 pnpm dev
 ```
 
-Open <http://localhost:5173>. The sample workspace works independently of the backend. The extraction page requires the backend and the enablement settings below. No Docker or cloud credentials are needed.
+Open <http://localhost:5173/overview>. Both services are needed. Before import the UI shows an empty-mailbox explanation; when the backend is unavailable it offers a connection retry, without fabricated fallback results.
 
-Try these sample workflows:
+If the default ports are occupied, run the backend on 8001 and the frontend on 5174:
 
-- **DG-004:** Inspect two discrepancies, then load sample BL v2 (two resolved, one new weight error) and v3. Complete the current review; older revisions stay read-only.
-- **DG-160:** Correct the misread BL gross weight from `88,570 KG` to the actual sample source value `88,750 KG`, enter a source reference, and save.
-- **DG-512:** Confirm the illustrative AI candidate against the sample text, then complete the review. This is not a real PDF or AI call.
-- **DG-516:** Supply missing information with provenance. It stays unresolved because external evidence cannot be verified in this prototype.
+```sh
+# Backend terminal
+ALLOWED_ORIGINS='["http://localhost:5174","http://127.0.0.1:5174"]' \
+  uv run --frozen uvicorn app.main:app --host 127.0.0.1 --port 8001 --no-access-log
+```
 
-Edits create local working copies saved in this browser. Refresh preserves them; **Reset demo** restores the baseline. Original machine results remain intact. Search and filters live in the URL; return navigation restores the queue state. Use **Print report** in a task to print or save the sample report as PDF.
+```sh
+# Frontend terminal
+API_PROXY_TARGET=http://127.0.0.1:8001 pnpm dev --host 127.0.0.1 --port 5174
+```
 
-If the default ports are occupied, leave the other application running. Start this backend with `--port 8001` and run the frontend with `API_PROXY_TARGET=http://127.0.0.1:8001 pnpm dev --port 5174`. Open <http://localhost:5174> in that case. `API_PROXY_TARGET` is a development-server environment override, not a browser variable.
+Open <http://127.0.0.1:5174/overview>. Keep this development mailbox bound to loopback; it is a single local workspace with no multi-user authentication.
 
-The backend serves:
+## Try the real examples
 
-- `GET /api/health`: liveness plus `capabilities.development_extraction` and `capabilities.upload_limit_bytes`
-- `/docs`: interactive API documentation
-- `/api/v1/dev/*`: uploads, supplied emails, and saved extraction history when explicitly enabled
+Search by email ID, subject, sender, or body. Inbox pages contain 50 emails in dataset order. Summary cards always cover the full mailbox. Dataset emails do not have a separate received-at field; the UI displays actual analysis times instead.
 
-Health reports process liveness and configured feature availability. It does not check dataset files or cloud services.
+- **email_004:** Two differences: consignee and notify party. Inspect the real TXT excerpts.
+- **email_160:** The PDF SI yields seven fields; its actual gross weight is `23,702 KG`. Open the original PDF at the evidence page.
+- **email_055:** XLSX SI and DOCX BL. Six fields match; the SI weight `243588` has no explicit unit, so weight remains unresolved. The BL's explicit KGS label supports normalization of `243,588`. No unit is guessed to force a match.
+- **email_501:** An invoice supplied instead of the BL requires replacement.
+- **email_512:** Actual image-only PDFs display **Visual extraction required**. No invented AI candidates are shown.
+- **email_516:** SI weight remains missing; BL weight is not copied into it.
+
+Use **Reanalyze** to run the same pipeline on the stored immutable sources. It saves a new run, marks it **On demand · Rules**, and refreshes the current result. Import-time runs are labeled **Precomputed · Rules**. A failed rerun keeps the last successful result visible with an explicit failure notice. Refreshes and backend restarts preserve saved results.
+
+**Print report** opens an in-page report preview using the same report component and table styling as printing. **Print / Save PDF** invokes the browser print dialog where supported. The report includes source versions, hashes, raw/normalized values, evidence, unresolved requirements, and the absence of human approval. The in-app browser may not expose a system print dialog; use a normal browser to print or save a PDF.
+
+The former hand-authored prototype and browser snapshots are no longer used. Human corrections, completion acknowledgment, uploaded replacements, and revision-delta review are later milestones; no fake controls are exposed for them.
 
 ## Local extraction
 
@@ -68,7 +120,7 @@ restart the backend. Open <http://127.0.0.1:5173/extraction>:
 
 - **Dataset inbox:** select `email_004` and click **Extract attachments** to process both listed files automatically. The default bundle is the sibling `sdoc-hackathon-bundle`; override with `DATASET_DIR` if needed.
 - **Upload a document:** choose `backend/tests/fixtures/extraction/email_160_SI.pdf` to inspect seven fields, page evidence, and the original PDF.
-- **History:** reopen saved runs and download the full audit JSON. History survives backend restarts in `backend/.local/extraction-audit.sqlite3` (override with `DEV_AUDIT_DB`). The sample workspace's **Reset demo** does not affect it.
+- **History:** reopen saved runs and download the full audit JSON. History survives backend restarts in `backend/.local/extraction-audit.sqlite3` (override with `DEV_AUDIT_DB`). This history is separate from imported mailbox analysis.
 
 The routes are unavailable in production or when the feature flag is off. Development
 history is shared by callers of the local backend. Each rerun creates a new record.
@@ -83,19 +135,38 @@ uv run --frozen python -m app.extraction tests/fixtures/extraction/email_160_SI.
 
 The command prints seven fields, original/canonical values, source evidence, and review issues as JSON. A successful command can still report missing or ambiguous values; inspect `needs_review`. See [the extraction guide](docs/EXTRACTION.md) for all formats, limits, tests, and the Python interface for backend integration.
 
-## Configuration
 
-The Vite development server proxies `/api` to `http://127.0.0.1:8000`. Leave `VITE_API_BASE_URL` empty to use this proxy. For a separately hosted API, set it to the backend origin (for example, `https://api.example.com`), without `/api`. Restart Vite after changing environment files. Vite public variables are bundled into the frontend; never store secrets in them.
+## API and configuration
 
-The backend loads `backend/.env`, with process environment variables taking precedence. `APP_ENV` defaults to `development`; `ENABLE_DEV_EXTRACTION` defaults to `false`. `ALLOWED_ORIGINS` is a JSON array, defaulting to localhost and 127.0.0.1 on port 5173; configure the frontend origin for direct cross-origin calls. CORS permits GET and, when development extraction is enabled, POST.
+| Endpoint | Behavior |
+|---|---|
+| `GET /api/health` | Process liveness plus local extraction capability and upload limit |
+| `GET /api/v1/samples` | `q`, `category`, `status`, `page`, `limit` (default 50, maximum 100); returns `items`, filtered `total`, and global `summary` |
+| `GET /api/v1/samples/{id}` | Original email, current documents, latest attempt, last successful result, and run summaries |
+| `GET /api/v1/samples/{id}/documents/{document_id}/content` | Original registered source, checked against its content hash |
+| `POST /api/v1/dev/samples/{id}/analyze` | JSON `{"expected_revision":1}`; synchronous run, 409 for an active run or stale revision |
 
-`SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `SUPABASE_STORAGE_BUCKET`, `GEMINI_API_KEY`, `GEMINI_MODEL`, and `DEMO_SESSION_SECRET` are reserved server-side settings. They are optional and unused in this scaffold. No provider clients are initialized.
+Interactive API documentation is at `/docs`. Local mailbox routes are registered **only when `APP_ENV=development`**. Other environments retain health but do not expose this unauthenticated local store. The PRD's public upload/save/read deployment gate remains outstanding.
 
-The Vite proxy is development-only. A production frontend will require a separately hosted backend with the appropriate base URL and CORS configuration, or a host-level `/api` proxy. Deployment is a later milestone.
+The backend loads `backend/.env`; process variables take precedence. `LOCAL_DATA_DIR` defaults to the backend's `.local` directory. Relative configured paths are resolved from the backend directory. `ALLOWED_ORIGINS` is a JSON array of permitted frontend origins; GET and JSON POST are supported. Reanalysis also rejects an unlisted browser Origin.
 
-## Checks
+Vite proxies `/api` to `http://127.0.0.1:8000` by default. `API_PROXY_TARGET` changes the development proxy. Leave `VITE_API_BASE_URL` empty for same-origin requests, or set an API origin without `/api` for a separately hosted frontend. Restart Vite after environment changes. Never place provider keys in `VITE_` variables.
 
-Frontend, from `frontend/`:
+Supabase, Gemini, and demo-session secret settings remain optional, server-only, and unused. This milestone does not initialize provider clients or deploy services.
+
+## Mailbox processing limits and interpretation
+
+- Accept TXT, PDF, DOCX, XLSX; at most 10 attachments per email and 10 MB per file.
+- PDFs: at most 20 pages; encrypted, malformed, empty, and no-text sources are distinguished.
+- Office archives: at most 2,000 entries and 50 MB expanded; XLSX at most 20 sheets and 100,000 cells. Extracted text is bounded to 1,000,000 characters per document.
+- Parsing runs in a subprocess with a 30-second deadline. Expired interrupted-run leases become visible failures after 60 seconds on a subsequent read; there is no background retry or durable queue.
+- XLSX formulas use cached results only. Missing caches, missing units, conflicting totals, unknown roles, or ambiguous pairs stay unresolved.
+- Explicit total gross weight takes precedence over individual weights. Normalization preserves legal-entity tokens. Port normalization uses a bounded table of name/code combinations observed in the provided documents, not fuzzy matching or a port-code authority; unknown or inconsistent combinations are not silently equated.
+- Rules are a bounded baseline, not measured accuracy claims for arbitrary shipping documents. Runtime results are independent of evaluation ground truth.
+
+## Local checks
+
+From `frontend/`:
 
 ```sh
 pnpm lint
@@ -105,7 +176,7 @@ pnpm format:check
 pnpm build
 ```
 
-Backend, from `backend/`:
+From `backend/`:
 
 ```sh
 uv run --frozen ruff check .
@@ -113,19 +184,6 @@ uv run --frozen ruff format --check .
 uv run --frozen pytest
 ```
 
-Run these checks locally; no cloud credentials are required. Frontend tests cover sample review safety and real extraction journeys, uploads, evidence, history, and failed saves. Backend tests cover health/CORS, four-format extraction, the development API, local persistence, restart recovery, timeouts, uncertainty, malformed inputs, resource limits, and the CLI. The frontend production build is written to `frontend/dist/`.
+Tests cover ingestion boundaries, source versions, evidence, four formats, classification ambiguity, missing data, failed/stale/concurrent runs, persistence, API isolation, pagination, and frontend failure/retry/report journeys. The organizer-data integration test uses the workspace dataset when present; otherwise set `DATASET_DIR=/absolute/path/to/data_v2`. It explicitly skips when that external input is absent; synthetic unit tests still run without it.
 
-## Repository layout
-
-- `frontend/`: React, TypeScript, Vite, and ESLint
-- `backend/app/`: FastAPI entrypoint, environment configuration, HTTP routes, and standalone extraction
-- `backend/tests/`: backend and extraction tests with source fixtures
-- `docs/`: existing product requirements and historical scope confirmation
-
-## Current scope
-
-Implemented: sample Overview/Inbox/review workflows, standalone four-format rule-based extraction, and the separate Local extraction API and UI with dataset attachments, manual upload, original files, evidence, and persistent local audit history.
-
-Not implemented: live email connection, classification, production SI/BL comparison, AI extraction, external evidence verification, private cloud storage, or deployment. The PRD's real-data deployment gate is still outstanding. Sample workspace labels and timestamps remain illustrative; Local extraction shows actual runs and recorded evidence.
-
-See [the PRD](docs/PRD.md) and [the UI implementation notes](docs/UI.md). New code, comments, logs, UI copy, and documentation use English.
+There is no GitHub Actions workflow. Build output, environment files, dependencies, caches, and local mailbox data are ignored. See [the PRD](docs/PRD.md) for the eventual release requirements and [UI notes](docs/UI.md) for current behavior. New code, comments, logs, documentation, and UI copy use English.

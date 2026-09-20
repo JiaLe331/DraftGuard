@@ -4,77 +4,81 @@ import {
   ArrowUpRightIcon,
   WarningCircleIcon,
   ClockIcon,
-  CheckCircleIcon,
   ClipboardTextIcon,
-  FunnelSimpleIcon,
-  EnvelopeSimpleIcon,
-  CaretDownIcon,
+  TrayIcon,
 } from '@phosphor-icons/react'
-import { useDemo } from '../demo/context'
+import { useResource } from '../mailbox/api'
+import { useMailbox } from '../mailbox/context'
 import {
-  actionLabel,
+  analyzedAt,
   categoryLabels,
-  filterTasks,
-  firstAttentionField,
-  summary,
-  workflow,
-  workflowLabels,
-  type Workflow,
-} from '../demo/model'
+  statusLabels,
+  taskAction,
+  type SampleList,
+} from '../mailbox/types'
 import { Avatar, EmptyState, StatusBadge } from '../components/Primitives'
 
-const statusCards = [
+const cards = [
   {
-    key: 'attention',
+    key: '',
+    label: 'Emails in your mailbox',
+    caption: 'Provided dataset · all categories',
+    icon: TrayIcon,
+    color: 'blue',
+  },
+  {
+    key: 'ATTENTION',
     label: 'Needs attention',
-    caption: 'Resolve differences & review values',
+    caption: 'Differences, uncertainty & failures',
     icon: WarningCircleIcon,
     color: 'amber',
   },
   {
-    key: 'waiting',
+    key: 'WAITING_DOCUMENT',
     label: 'Awaiting documents',
-    caption: 'Waiting for the right source files',
+    caption: 'Waiting for the source pair',
     icon: ClockIcon,
     color: 'slate',
   },
   {
-    key: 'ready',
+    key: 'READY',
     label: 'Ready for review',
-    caption: 'All fields match. Your check is next.',
+    caption: 'Seven fields match · not approved',
     icon: ClipboardTextIcon,
-    color: 'blue',
-  },
-  {
-    key: 'completed',
-    label: 'Completed',
-    caption: 'Current version reviewed',
-    icon: CheckCircleIcon,
     color: 'teal',
   },
-] as const
+]
 export function Overview({ inbox = false }: { inbox?: boolean }) {
-  const { tasks } = useDemo()
   const [params, setParams] = useSearchParams()
   const location = useLocation()
-  const filters = {
-    query: params.get('q') ?? '',
-    status: params.get('status') ?? '',
-    category: params.get('category') ?? '',
-    sort: params.get('sort') ?? (inbox ? 'newest' : 'priority'),
+  const { refresh } = useMailbox()
+  const query = new URLSearchParams()
+  for (const name of ['q', 'category', 'status', 'page']) {
+    if (params.get(name)) query.set(name, params.get(name)!)
   }
-  const filtered = filterTasks(tasks, filters)
-  const count = (state: Workflow) => tasks.filter((t) => workflow(t) === state).length
-  const from = location.pathname + location.search
-  const taskIds = filtered
-    .filter((t) => !['completed', 'other'].includes(workflow(t)))
-    .map((t) => t.id)
+  const { data, error, reload } = useResource<SampleList>(`/api/v1/samples?${query}`)
+  const status = params.get('status') ?? ''
   function setFilter(key: string, value: string) {
     const next = new URLSearchParams(params)
     if (value) next.set(key, value)
     else next.delete(key)
-    setParams(next, { replace: true })
+    if (key !== 'page') next.delete('page')
+    setParams(next)
   }
+  function retry() {
+    reload()
+    refresh()
+  }
+  const counts: Record<string, number> = {
+    '': data?.summary.total ?? 0,
+    ATTENTION:
+      (data?.summary.states.REVIEW_REQUIRED ?? 0) +
+      (data?.summary.states.DISCREPANCIES_FOUND ?? 0) +
+      (data?.summary.states.FAILED ?? 0),
+    WAITING_DOCUMENT: data?.summary.states.WAITING_DOCUMENT ?? 0,
+    READY: data?.summary.states.READY ?? 0,
+  }
+  const from = location.pathname + location.search
   return (
     <div className="page overview-page">
       <div className="page-heading">
@@ -83,30 +87,30 @@ export function Overview({ inbox = false }: { inbox?: boolean }) {
           <h1>{inbox ? 'Inbox' : 'A clear view of what’s next.'}</h1>
           <p>
             {inbox
-              ? 'Every email, already classified. Find the conversation you need.'
-              : 'Your documents are organized. Let’s take care of what needs you.'}
+              ? 'Your provided emails, their original attachments, and real analysis.'
+              : 'Source-backed results. A clear next step for every document check.'}
           </p>
         </div>
-        <span className="page-date">
-          Sample workspace <span>20 September 2026</span>
-        </span>
+        <div className="page-date">
+          Demo mailbox<span>Provided dataset</span>
+        </div>
       </div>
       {!inbox && (
         <div className="stats-grid">
-          {statusCards.map(({ key, label, caption, icon: Icon, color }) => (
+          {cards.map(({ key, label, caption, icon: Icon, color }) => (
             <button
               key={key}
-              className={`stat-card ${filters.status === key ? 'selected' : ''}`}
-              aria-pressed={filters.status === key}
-              onClick={() => setFilter('status', filters.status === key ? '' : key)}
+              className={`stat-card ${status === key ? 'selected' : ''}`}
+              aria-pressed={status === key}
+              onClick={() => setFilter('status', key)}
             >
               <span className="stat-top">
                 <span className={`stat-icon ${color}`}>
                   <Icon size={21} />
                 </span>
-                <ArrowUpRightIcon className="stat-arrow" size={17} />
+                <ArrowUpRightIcon size={17} />
               </span>
-              <strong className="stat-number">{count(key)}</strong>
+              <strong className="stat-number">{data ? counts[key] : '—'}</strong>
               <span className="stat-label">{label}</span>
               <span className="stat-caption">{caption}</span>
             </button>
@@ -117,122 +121,131 @@ export function Overview({ inbox = false }: { inbox?: boolean }) {
         <div className="queue-heading">
           <div>
             <h2 id="queue-title">
-              {inbox
-                ? 'All emails'
-                : filters.status
-                  ? (workflowLabels[filters.status as Workflow] ?? 'Your work queue')
-                  : 'Your work queue'}
-              <span className="count-pill">{filtered.length}</span>
+              {inbox ? 'All emails' : 'Your work queue'}
+              {data && <span className="count-pill">{data.total}</span>}
             </h2>
-            <p>
-              {inbox
-                ? 'Select a message to see its context and next steps.'
-                : 'Already classified. Prioritized for your next action.'}
-            </p>
+            <p>Dataset order · results from actual source files</p>
           </div>
-          <div className="queue-legend">
-            <span className="sample-dot" />
-            Sample results
-          </div>
+          <button className="button compact" onClick={retry}>
+            Refresh
+          </button>
         </div>
         <div className="filter-bar">
           <div className="view-tabs" aria-label="Task type">
             <button
-              className={!filters.category ? 'active' : ''}
+              className={!params.get('category') ? 'active' : ''}
               onClick={() => setFilter('category', '')}
             >
               All emails
             </button>
             <button
-              className={filters.category === 'BL_COMPARISON' ? 'active' : ''}
+              className={params.get('category') === 'BL_COMPARISON' ? 'active' : ''}
               onClick={() => setFilter('category', 'BL_COMPARISON')}
             >
               Document checks
             </button>
           </div>
           <div className="filter-controls">
-            <FunnelSimpleIcon size={17} aria-hidden="true" />
             <label className="select-wrap">
               <span className="sr-only">Filter by status</span>
-              <select value={filters.status} onChange={(e) => setFilter('status', e.target.value)}>
+              <select value={status} onChange={(e) => setFilter('status', e.target.value)}>
                 <option value="">All statuses</option>
-                {Object.entries(workflowLabels).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
+                <option value="ATTENTION">Needs attention</option>
+                {(
+                  [
+                    'NOT_ANALYZED',
+                    'RUNNING',
+                    'FAILED',
+                    'WAITING_DOCUMENT',
+                    'REVIEW_REQUIRED',
+                    'DISCREPANCIES_FOUND',
+                    'READY',
+                    'NOT_APPLICABLE',
+                  ] as const
+                ).map((key) => (
+                  <option key={key} value={key}>
+                    {statusLabels[key]}
                   </option>
                 ))}
               </select>
-              <CaretDownIcon size={12} />
             </label>
-            <label className="select-wrap category-filter">
+            <label className="select-wrap">
               <span className="sr-only">Filter by category</span>
               <select
-                value={filters.category}
+                value={params.get('category') ?? ''}
                 onChange={(e) => setFilter('category', e.target.value)}
               >
                 <option value="">All categories</option>
-                {Object.entries(categoryLabels).map(([value, label]) => (
-                  <option key={value} value={value}>
+                {Object.entries(categoryLabels).map(([key, label]) => (
+                  <option key={key} value={key}>
                     {label}
                   </option>
                 ))}
+                <option value="UNCLASSIFIED">Needs classification</option>
               </select>
-              <CaretDownIcon size={12} />
-            </label>
-            <label className="select-wrap">
-              <span className="sr-only">Sort tasks</span>
-              <select value={filters.sort} onChange={(e) => setFilter('sort', e.target.value)}>
-                <option value="priority">Priority first</option>
-                <option value="newest">Newest first</option>
-              </select>
-              <CaretDownIcon size={12} />
             </label>
           </div>
         </div>
-        {filters.query && (
+        {params.get('q') && (
           <div className="search-summary">
-            Results for “{filters.query}”
+            Results for “{params.get('q')}”
             <button className="text-button" onClick={() => setFilter('q', '')}>
               Clear search
             </button>
           </div>
         )}
-        {filtered.length ? (
-          <div
-            className="task-table"
-            role="table"
-            aria-label={inbox ? 'Emails' : 'Document work queue'}
-          >
+        {error ? (
+          <EmptyState title="The mailbox could not be loaded">
+            <p role="alert">{error.message}</p>
+            <button className="button primary" onClick={retry}>
+              Retry connection
+            </button>
+          </EmptyState>
+        ) : !data ? (
+          <div className="empty-state" role="status">
+            Loading mailbox…
+          </div>
+        ) : data.summary.total === 0 ? (
+          <EmptyState title="Your dataset has not been imported">
+            <p>
+              Import the provided dataset using the local setup instructions, then refresh this
+              mailbox.
+            </p>
+          </EmptyState>
+        ) : data.items.length === 0 ? (
+          <EmptyState title="No emails on this page">
+            <p>Try another search, filter, or page.</p>
+            <button className="button" onClick={() => setParams({})}>
+              Clear filters
+            </button>
+          </EmptyState>
+        ) : (
+          <div className="task-table" role="table" aria-label="Emails">
             <div className="task-table-head task-grid" role="row">
-              <span role="columnheader">EMAIL / SHIPMENT</span>
-              <span role="columnheader">CATEGORY</span>
-              <span role="columnheader">{inbox ? 'STATUS' : 'FINDING'}</span>
-              <span role="columnheader">NEXT ACTION</span>
-              <span role="columnheader">UPDATED</span>
+              {['EMAIL / SHIPMENT', 'CATEGORY', 'FINDING', 'NEXT ACTION', 'LAST ANALYZED'].map(
+                (label) => (
+                  <span key={label} role="columnheader">
+                    {label}
+                  </span>
+                ),
+              )}
             </div>
             <div role="rowgroup">
-              {filtered.map((task) => (
+              {data.items.map((task) => (
                 <div
                   key={task.id}
-                  className={`task-row task-grid ${workflow(task) === 'attention' ? 'has-attention' : ''}`}
+                  className={`task-row task-grid ${['REVIEW_REQUIRED', 'DISCREPANCIES_FOUND', 'FAILED'].includes(task.workflow_state) ? 'has-attention' : ''}`}
                   role="row"
                 >
                   <div className="task-mail" role="cell">
-                    <Avatar initials={task.initials} color={task.color} />
+                    <Avatar initials={task.sender.slice(0, 2).toUpperCase()} />
                     <div className="mail-text">
-                      <div className="sender-line">
-                        {task.sender}
-                        <span>#{task.reference}</span>
-                      </div>
-                      <Link
-                        className="mail-subject"
-                        to={`/tasks/${task.id}?field=${firstAttentionField(task)}`}
-                        state={{ from, taskIds }}
-                      >
+                      <div className="sender-line">{task.sender}</div>
+                      <Link className="mail-subject" to={`/tasks/${task.id}`} state={{ from }}>
                         {task.subject}
                       </Link>
                       <div className="mail-meta">
-                        {inbox ? task.body.split('\n').find((s) => s.length > 25) : task.route}
+                        {task.id} · {task.attachment_count} attachments
                       </div>
                     </div>
                   </div>
@@ -240,59 +253,65 @@ export function Overview({ inbox = false }: { inbox?: boolean }) {
                     <span
                       className={`category-tag ${task.category === 'BL_COMPARISON' ? 'comparison' : ''}`}
                     >
-                      {categoryLabels[task.category]}
+                      {task.category ? categoryLabels[task.category] : 'Needs classification'}
                     </span>
                   </div>
                   <div className="task-finding" role="cell">
-                    <StatusBadge status={workflow(task)} />
-                    <span className="finding-detail">{summary(task)}</span>
+                    <StatusBadge status={task.workflow_state} />
+                    {task.category === 'BL_COMPARISON' && (
+                      <span className="finding-detail">
+                        {task.known_defect_fields.length} discrepancies · {task.coverage.checked}/7
+                        checked
+                      </span>
+                    )}
                   </div>
                   <div className="task-action" role="cell">
                     <Link
-                      className={`row-action ${workflow(task) === 'attention' ? 'emphasized' : ''}`}
-                      to={`/tasks/${task.id}?field=${firstAttentionField(task)}`}
-                      state={{ from, taskIds }}
+                      className="row-action emphasized"
+                      to={`/tasks/${task.id}`}
+                      state={{ from }}
                     >
-                      {actionLabel(task)}
+                      {taskAction(task)}
                       <ArrowRightIcon size={15} />
                     </Link>
                   </div>
-                  <time role="cell" className="task-time" dateTime={task.updatedAt}>
-                    {new Date(task.updatedAt).toLocaleTimeString('en-GB', {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                      timeZone: 'Asia/Kuala_Lumpur',
-                    })}
-                  </time>
+                  <div className="task-time" role="cell">
+                    {analyzedAt(task.last_analyzed)}
+                  </div>
                 </div>
               ))}
             </div>
           </div>
-        ) : (
-          <EmptyState title={filters.query ? 'No matching emails' : 'Nothing in this view'}>
-            <p>Try another search or clear your filters to see all sample tasks.</p>
-            <button className="button" onClick={() => setParams({})}>
-              Clear filters
-            </button>
-          </EmptyState>
         )}
-        <div className="queue-footer">
-          <span>
-            Showing {filtered.length} of {tasks.length} emails
-          </span>
-          <span>
-            <EnvelopeSimpleIcon size={15} />
-            Team-authored demo workspace
-          </span>
-        </div>
+        {data && data.total > 0 && (
+          <nav className="queue-footer pagination" aria-label="Mailbox pages">
+            <span>
+              {Math.min((data.page - 1) * data.limit + 1, data.total)}–
+              {Math.min(data.page * data.limit, data.total)} of {data.total}
+            </span>
+            <div>
+              <button
+                className="button compact"
+                disabled={data.page <= 1}
+                onClick={() => setFilter('page', String(data.page - 1))}
+              >
+                Previous
+              </button>
+              <button
+                className="button compact"
+                disabled={data.page * data.limit >= data.total}
+                onClick={() => setFilter('page', String(data.page + 1))}
+              >
+                Next
+              </button>
+            </div>
+          </nav>
+        )}
       </section>
-      <p className="page-footnote">
-        <ShieldNote />A little clarity, before the next shipment.{' '}
-        <span>Sample results are illustrative, not live AI analysis.</span>
-      </p>
+      <div className="page-footnote">
+        Demo mailbox · Provided dataset
+        <span>Rule analysis · Saved locally · No Gmail connection</span>
+      </div>
     </div>
   )
-}
-function ShieldNote() {
-  return <CheckCircleIcon size={17} aria-hidden="true" />
 }

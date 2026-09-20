@@ -1,35 +1,44 @@
-# DraftGuard UI prototype
+# DraftGuard dataset mailbox
 
-## Product direction
+## Product direction and visual system
 
-DraftGuard is an independent document-review workspace with a familiar email-inspired visual language. Overview is the default destination: users see classified tasks, outstanding findings, and their next action before opening a document. Inbox is an alternative view of the same tasks. No real mailbox is connected.
+DraftGuard is an independent document-review workspace with a familiar email-inspired visual language. Overview summarizes the entire supplied mailbox; Inbox provides a searchable, paginated email view. Both lead into the same source-backed workspace. No personal Gmail or live mailbox is connected.
 
-## Visual system
+Keep white panels on a pale gray-blue canvas, blue primary actions, system sans-serif typography, Phosphor icons, and text/icon status labels. Red signals discrepancies or failures, amber review requirements, and blue readiness. Readiness is not completion. Respect reduced-motion preferences.
 
-Use white panels on a pale gray-blue canvas, blue primary actions, system sans-serif typography, and a consistent Phosphor regular icon set. Status uses both text and an icon. Red denotes discrepancies, amber pending review, blue readiness, and green completion. Typography is at least 12px, with 14–16px body text and larger headings. CSS variables define the semantic palette. Respect reduced motion.
+At 1280px and above, comparison and evidence sit side by side. Evidence moves below the comparison at intermediate widths. Phones use paired SI/BL value cards and a navigation drawer. Selecting a field focuses and scrolls to the evidence region.
 
-At 1280px and above, the workspace uses a comparison/evidence split. At intermediate widths evidence appears below the comparison. On small phones, fields become paired SI/BL cards and navigation uses a drawer. Selecting a field on a narrower screen moves to its evidence. Print CSS removes navigation and includes sample labels and version information.
+## Real data and state ownership
 
-## Implementation boundaries
+The API, not the browser, owns classification, normalization, comparison, coverage, and workflow states. The UI has no fallback fixtures and does not load old localStorage reviews. Backend failure must never turn into apparently successful sample data.
 
-- `frontend/src/demo/fixtures.ts` defines 13 team-authored emails and their source snippets. It does not load organizer ground truth or call an AI provider.
-- `frontend/src/demo/model.ts` defines typed tasks, revisions, evidence, review events, deterministic sample comparison, and completion gates.
-- The demo adapter separates baseline source versions from review overlays and persists local working copies. External supplied information remains unverified. Production parsing and normalization still need their own implementation and validation.
-- The browser snapshot is a convenience for UI exploration, not an authenticated audit trail. No sensitive operational documents should be stored in it.
-- Corrections must match the selected sample evidence; they cannot rewrite a source to erase a genuine discrepancy. Loading the next sample revision changes the current source pair and invalidates prior completion.
-- Historical revisions are read-only. Candidate confirmation, correction, and completion are scoped to the current revision. A stored review does not mutate the original machine value.
-- The printable report is a sample seven-field report, not release authorization or a legal review.
+Mailbox identity is labeled `Demo mailbox · Provided dataset`. The raw email body is rendered as text, without executing HTML or turning dataset links into automatic requests. Received times are not invented; `Last analyzed` describes the actual attempt time. Import-time results say `Precomputed · Rules`; manual runs say `On demand · Rules`.
 
-## Navigation and states
+The list uses 50-item server pagination and dataset order. Filters reset pagination. Search includes email ID, subject, sender, and body. Summary cards and sidebar counts use global totals, independently of the selected page and filters.
 
-Routes: `/overview`, `/inbox`, `/tasks/:taskId`. Query parameters preserve search, filters, sorting, source selection, and revision. Returning from a task retains the queue context. Next task uses the originating filtered queue and skips completed or non-comparison tasks.
+## Workspace and reports
 
-The development **Local extraction** screens use `/extraction` and `/extraction/runs/:runId` and follow the same visual system. They use real documents and backend audit history, kept separate from sample reviews and **Reset demo**. Section, inbox search/filter/page, selected email, attachment, and source evidence are stored in the URL. Returning from a run restores the originating inbox or history view.
+- Show original email context, registered attachments, source revision, seven raw/normalized field pairs, coverage, known discrepancies, and concrete review requirements.
+- Evidence references a specific immutable document and an actual line, PDF page, DOCX paragraph/table row, or XLSX sheet/cell range. PDF links include the page. Office formats use extracted text views rather than pretending to provide a full office renderer.
+- Source selection does not reassign document roles. Unknown or ambiguous roles remain unresolved; the user can still inspect original attachments.
+- Reanalysis is a synchronous, bounded backend operation. Busy controls prevent duplicate submissions. Completed attempts are saved before the current result is refreshed. A failed latest attempt leaves the previous successful result visible with a failure banner.
+- `Ready for review` means seven fields match with supported evidence; it does not record human approval. Editing, completion, replacing attachments, and simulated revisions are not offered in this milestone.
+- Print report opens a readable in-page preview. The browser print action uses the same report component, removes navigation, repeats table headers, and includes source IDs/hashes, evidence, unresolved items, actual run metadata, and the absence of a human completion acknowledgment. Native print dialogs depend on browser support.
+
+## Routes and failures
+
+Routes remain `/overview`, `/inbox`, `/tasks/:taskId`, with original dataset IDs such as `email_004`. URL parameters carry `q`, `category`, `status`, `page`, `field`, `source`, `document`, and `report`. Return navigation preserves the originating queue. Old numeric prototype task links are not mapped to invented results.
+
+Handle loading, dataset not imported, no search results, invalid/missing task, API unavailable, no result, active analysis, missing source, scan requiring vision, and failed reanalysis explicitly. Inconclusive email classification remains a review requirement; a missing document never becomes seven matches.
+
+## Verification and current limits
+
+Run the frontend checks in README. Component tests exercise server totals/pagination, retry without fixture fallback, empty import, actual evidence links, removal of prototype-only actions, report preview, failed rerun recovery, and stale-response handling. Backend tests own the authoritative document and comparison rules.
+
+This UI is backed by a local development mailbox. Multi-user sessions, cloud persistence, Gemini, human review writes, uploaded replacements, and the PRD's public deployment gate remain future work. Development runtime data is not part of the Git changes.
+
+## Local extraction
+
+The development **Local extraction** screens use `/extraction` and `/extraction/runs/:runId` and follow the same visual system. They use real documents and backend audit history, kept separate from imported mailbox analysis. Section, inbox search/filter/page, selected email, attachment, and source evidence are stored in the URL. Returning from a run restores the originating inbox or history view.
 
 Extraction fields and evidence appear side by side from 1280px; evidence sits below at narrower widths. Below 768px, each field becomes a card pairing its original and normalized values for the selected attachment. Evidence selection moves focus to the source panel on narrower screens. Blue marks an extracted value available for inspection, amber marks an unresolved value or processing problem, and green marks completed extraction. Each status also has text and a regular Phosphor icon; extraction completion does not indicate shipment approval. Printed extraction views retain the local-extraction label, run ID, pipeline version, and selected filename.
-
-The workspace has explicit loading, missing-task, missing-source, historical, unsaved-edit, storage-failure, and completion states. Storage writes complete before the UI announces success. Save failures retain the editable draft. Reset removes only this prototype's local storage key.
-
-## Verification
-
-Run `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm format:check`, and `pnpm build` from `frontend/`. Component tests cover direct issue navigation, scan confirmation and completion, failed saves, and unsaved navigation. Domain tests cover filtering, immutable machine results, missing information, invalid corrections, revisions, completion gates, and storage restoration.

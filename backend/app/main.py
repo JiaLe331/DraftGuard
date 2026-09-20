@@ -2,11 +2,13 @@ import sqlite3
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.exceptions import HTTPException
 
 from app.api.health import router as health_router
+from app.api.samples import build_router
 from app.config import Settings
 from app.dev_extraction.api import router as dev_router
 from app.dev_extraction.dataset import DatasetError
@@ -30,11 +32,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.add_middleware(
         CORSMiddleware,
         allow_origins=settings.allowed_origins,
-        allow_methods=["GET", "POST"] if settings.dev_extraction_enabled else ["GET"],
+        allow_methods=["GET", "POST"] if settings.app_env == "development" else ["GET"],
         allow_headers=["Content-Type"],
         expose_headers=["X-Request-ID"],
     )
     application.include_router(health_router)
+    if settings.app_env == "development":
+        application.include_router(build_router(settings))
     if settings.dev_extraction_enabled:
         store = AuditStore(settings.dev_audit_db)
         application.state.audit_store = store
@@ -59,6 +63,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @application.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError):
+        if request.url.path.startswith(("/api/v1/samples", "/api/v1/dev/samples")):
+            return await request_validation_exception_handler(request, exc)
         return error_response(
             "INVALID_REQUEST",
             "Check the request fields and identifiers.",
@@ -68,6 +74,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @application.exception_handler(HTTPException)
     async def http_error(request: Request, exc: HTTPException):
+        if request.url.path.startswith(("/api/v1/samples", "/api/v1/dev/samples")):
+            return await http_exception_handler(request, exc)
         return error_response(
             "NOT_FOUND" if exc.status_code == 404 else "REQUEST_REJECTED",
             "The requested resource is unavailable."

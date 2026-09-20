@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     )
 
     app_env: str = "development"
+    local_data_dir: Path = Path(__file__).resolve().parents[1] / ".local"
     enable_dev_extraction: bool = False
     dataset_dir: Path = Path(__file__).resolve().parents[3] / "sdoc-hackathon-bundle"
     dev_audit_db: Path = Path(__file__).resolve().parents[1] / ".local/extraction-audit.sqlite3"
@@ -31,3 +32,8 @@ class Settings(BaseSettings):
     @property
     def dev_extraction_enabled(self) -> bool:
         return self.app_env == "development" and self.enable_dev_extraction
+
+    @field_validator("local_data_dir")
+    @classmethod
+    def resolve_local_directory(cls, value: Path) -> Path:
+        return value if value.is_absolute() else Path(__file__).resolve().parents[1] / value

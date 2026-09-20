@@ -39,7 +39,7 @@ This UI is backed by a local development mailbox. Multi-user sessions, cloud per
 
 ## Local extraction
 
-The development **Local extraction** screens use `/extraction` and `/extraction/runs/:runId` and follow the same visual system. They use real documents and backend audit history, kept separate from imported mailbox analysis. Section, inbox search/filter/page, selected email, attachment, and source evidence are stored in the URL. Returning from a run restores the originating inbox or history view.
+The development **Local extraction** screens use `/extraction` and `/extraction/runs/:runId` and follow the same visual system. They use real documents and backend audit history, shared with new imported mailbox analyses. Section, inbox search/filter/page, selected email, attachment, and source evidence are stored in the URL. Returning from a run restores the originating inbox or history view.
 
 Extraction fields and evidence appear side by side from 1280px; evidence sits below at narrower widths. Below 768px, each field becomes a card pairing its original and normalized values for the selected attachment. Evidence selection moves focus to the source panel on narrower screens. Blue marks an extracted value available for inspection, amber marks an unresolved value or processing problem, and green marks completed extraction. Each status also has text and a regular Phosphor icon; extraction completion does not indicate shipment approval. Printed extraction views retain the local-extraction label, run ID, pipeline version, and selected filename.
 
@@ -47,7 +47,7 @@ Extraction fields and evidence appear side by side from 1280px; evidence sits be
 
 The main sidebar includes **Audit Trail** at `/audit` and `/audit/runs/:runId`, gated
 by the same development capability as Extraction. It follows this visual system
-and targets desktop. It stays separate from imported mailbox analysis.
+and targets desktop. It includes new mailbox analyses alongside uploads and dataset extraction.
 
 The list supports search, processing outcome, source type, review status, and
 pagination. A run shows provenance and document identities, a filterable chronological
@@ -61,5 +61,9 @@ Active runs poll every second and the list every five seconds while visible, wit
 overlapping requests. Previously displayed data survives connection failures, with a
 visible retry state. Terminal runs stop polling after the remaining event pages load.
 Legacy runs are identified explicitly; missing historical events are never simulated.
-This timeline covers local extraction runs. The imported mailbox's Analyze and
-Reanalyze actions use a separate analysis service and do not appear in this timeline.
+Inbox Analyze / Reanalyze starts a background run through the shared extractor.
+The workspace links to its live audit and each historical run links to its own
+record. Mailbox audit events include classification, unique SI/BL pair selection,
+and comparison, with separate SI/BL evidence buttons. Audit runs link back to the
+mailbox results. Earlier analyses have no invented trace. Sidebar counts refresh
+after processing completes; the existing classification/comparison workflow remains.

@@ -4,7 +4,8 @@ This milestone implements rule-based extraction from one TXT, PDF, DOCX, or XLSX
 document. It returns seven shipment fields with original values, canonical values,
 source evidence, and review issues. A development API and the **Local extraction**
 page now connect that extractor to uploads, dataset emails, and SQLite audit history.
-They do not compare document pairs, classify emails, call Gemini, or connect a live mailbox.
+The Inbox also uses this shared extractor inside its email classification and SI/BL
+comparison workflow. OCR, Gemini, and live mailbox connections remain future work.
 
 ## Try it in the browser (no Docker needed)
 
@@ -70,8 +71,49 @@ attachments can save an explicit **No attachments** result.
 Extraction finished means the processing completed. **Needs review** means one or
 more values remain unresolved; **Finished with errors** means at least one attachment
 failed or timed out. These are extraction states, not shipment approval or match states.
-Rerunning creates another record. Local extraction history is separate from the
-imported mailbox and its Analyze / Reanalyze results.
+Rerunning creates another record. Imported mailbox analyses now share this audit
+history and extractor, while retaining their mailbox comparison results.
+
+## Inbox analysis and the shared extractor
+
+1. Import the organizer mailbox using the command in [README](../README.md), before
+   starting the API. Stop the API before running the CLI against its databases.
+2. Open **Inbox**, select an email, and choose **Analyze email** or **Reanalyze**.
+3. Open **View live audit** during processing or **View audit trail** afterward.
+   Audit history can be filtered to **Mailbox analysis**. Each analysis-history row
+   links to its own audit, and an audit links back to the mailbox results.
+4. Expand a comparison event to see both original/normalized values and follow its
+   SI or BL evidence. The original mailbox document IDs are retained throughout.
+
+The frontend uses a saved background run. Synchronous API calls remain supported:
+
+```sh
+curl -X POST "http://127.0.0.1:8000/api/v1/dev/samples/email_004/analyze?wait=false" \
+  -H "Content-Type: application/json" -d '{"expected_revision":1}'
+```
+
+The 202 response contains mailbox detail, including `latest_run.audit_run_id`.
+Poll `/api/v1/samples/email_004` for results or
+`/api/v1/dev/runs/{audit_run_id}/events` for the live trace. Omitting `wait=false`
+waits for completion and returns 200. Duplicate/stale submissions return 409;
+exhausted shared capacity returns retryable 503.
+
+Classification rules and the seven-field comparison workflow are retained. Only
+emails classified for BL comparison extract/compare their attachments; other
+categories record classification and explicit skipped steps. No OCR or Gemini
+step is fabricated for unreadable PDFs. Missing values/units remain unresolved.
+
+New analyses use `mailbox-shared-2` and the exact shared document contract. Earlier
+mailbox results remain readable with `audit_run_id: null` and no invented events;
+reanalysis creates a new record. CLI `--analyze` also upgrades outdated pipeline
+versions by creating new runs. Company boundaries, formula handling, and port text
+now follow the shared rules, so older and newly analyzed findings can differ.
+
+Mailbox result updates and the audit's terminal event/status use one attached
+SQLite transaction, so ordinary save failures roll back success in both stores.
+The last successful mailbox result survives a failed run. Startup recovers
+unfinished mailbox attempts without rerunning them. This local development setup
+is not a crash-proof distributed or production ledger.
 
 ## Development configuration and storage
 
@@ -117,8 +159,8 @@ and labeled **Legacy trace**; missing historical lifecycle events are not invent
 The audit is operational development history, not an authenticated production ledger.
 
 At most two runs may process concurrently, with no waiting queue. Additional
-submissions receive retryable HTTP 503 `EXTRACTION_BUSY`. Both synchronous and
-asynchronous callers share this limit. The application owns the background threads;
+submissions receive retryable HTTP 503 `EXTRACTION_BUSY`. Mailbox analysis, uploads, and dataset extraction, including synchronous and
+asynchronous callers, share this limit. The application owns the background threads;
 no Redis, Celery, external queue, or additional service is required.
 
 Each document runs in a separate worker process. A timeout kills that worker,
@@ -132,7 +174,9 @@ The startup command disables access logs so inbox search text is not logged in U
 
 ## Development API and integration
 
-All development routes return 404 unless both enablement settings allow them.
+The extraction and audit routes below return 404 unless both enablement settings
+allow them. Mailbox routes require `APP_ENV=development`; their analyses still record
+audits when the extraction UI flag is off. Enable the flag to inspect those audits.
 Interactive request forms are at [API docs](http://127.0.0.1:8000/docs).
 
 | Method and path | Response |

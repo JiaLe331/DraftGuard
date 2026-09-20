@@ -121,19 +121,25 @@ restart the backend. Open <http://127.0.0.1:5173/extraction>:
 - **Dataset inbox:** select `email_004` and click **Extract attachments** to process both listed files automatically. The default bundle is the sibling `sdoc-hackathon-bundle`; override with `DATASET_DIR` if needed.
 - **Upload a document:** choose `backend/tests/fixtures/extraction/email_160_SI.pdf` to inspect seven fields, page evidence, and the original PDF.
 - **Audit Trail:** open `/audit` from the sidebar for live backend steps, source evidence, selection decisions, review reasons, and failures. Extraction results include a direct link to their audit. Processing continues through navigation and refresh.
-- **History:** reopen saved runs and download the full audit JSON. History survives backend restarts in `backend/.local/extraction-audit.sqlite3` (override with `DEV_AUDIT_DB`). This history is separate from imported mailbox analysis.
+- **History:** reopen saved runs and download the full audit JSON. History survives backend restarts in `backend/.local/extraction-audit.sqlite3` (override with `DEV_AUDIT_DB`). New mailbox analysis runs also appear in this audit history.
 
-The Inbox's **Analyze / Reanalyze** action uses `app.documents.analysis` for email
-classification, field extraction, and SI/BL comparison. The **Extraction** page uses
-`app.extraction.extract_document` for independent document extraction and live
-auditing. Their rules and stored runs are separate, so results can differ. Audit
-Trail currently covers only runs started through the local extraction service;
-mailbox analysis does not publish events there.
+The Inbox's **Analyze / Reanalyze** action keeps email classification and SI/BL
+comparison in `app.documents.analysis`, but uses the same `extract_document(...)`
+and bounded run service as uploads and dataset extraction. Its **View live audit**
+link opens the recorded classification, extraction, source evidence, and comparison
+steps. Non-comparison emails record classification and retain their originals without
+pretending extraction or comparison ran.
+
+New mailbox runs use pipeline version `mailbox-shared-2`. Existing results and
+originals remain unchanged; **Reanalyze** creates a new result using the shared rules.
+Older mailbox runs have no invented audit history. Port codes remain in normalized
+values, formulas always require review, and uncertain company boundaries remain
+unresolved. These can change findings compared with an older mailbox analysis.
 
 The routes are unavailable in production or when the feature flag is off. Development
 history is shared by callers of the local backend. Each rerun creates a new record.
 Two runs may process simultaneously; further submissions receive a retryable busy
-response. Run only one backend process per audit database. Existing history migrates
+response. Run only one backend process per mailbox/audit database pair. Stop the API before running the import/analysis CLI against those same databases. Existing history migrates
 automatically and appears as Legacy trace, with original results and files preserved.
 See [the extraction setup guide](docs/EXTRACTION.md) for API requests, configuration,
 review states, resource limits, and frontend integration examples.
@@ -155,7 +161,7 @@ The command prints seven fields, original/canonical values, source evidence, and
 | `GET /api/v1/samples` | `q`, `category`, `status`, `page`, `limit` (default 50, maximum 100); returns `items`, filtered `total`, and global `summary` |
 | `GET /api/v1/samples/{id}` | Original email, current documents, latest attempt, last successful result, and run summaries |
 | `GET /api/v1/samples/{id}/documents/{document_id}/content` | Original registered source, checked against its content hash |
-| `POST /api/v1/dev/samples/{id}/analyze` | JSON `{"expected_revision":1}`; synchronous run, 409 for an active run or stale revision |
+| `POST /api/v1/dev/samples/{id}/analyze` | JSON `{"expected_revision":1}`; synchronous by default; `?wait=false` returns 202 with the saved mailbox detail and `latest_run.audit_run_id`; 409 for an active run or stale revision, 503 when busy |
 
 Interactive API documentation is at `/docs`. Local mailbox routes are registered **only when `APP_ENV=development`**. Other environments retain health but do not expose this unauthenticated local store. The PRD's public upload/save/read deployment gate remains outstanding.
 
@@ -169,10 +175,10 @@ Supabase, Gemini, and demo-session secret settings remain optional, server-only,
 
 - Accept TXT, PDF, DOCX, XLSX; at most 10 attachments per email and 10 MB per file.
 - PDFs: at most 20 pages; encrypted, malformed, empty, and no-text sources are distinguished.
-- Office archives: at most 2,000 entries and 50 MB expanded; XLSX at most 20 sheets and 100,000 cells. Extracted text is bounded to 1,000,000 characters per document.
-- Parsing runs in a subprocess with a 30-second deadline. Expired interrupted-run leases become visible failures after 60 seconds on a subsequent read; there is no background retry or durable queue.
-- XLSX formulas use cached results only. Missing caches, missing units, conflicting totals, unknown roles, or ambiguous pairs stay unresolved.
-- Explicit total gross weight takes precedence over individual weights. Normalization preserves legal-entity tokens. Port normalization uses a bounded table of name/code combinations observed in the provided documents, not fuzzy matching or a port-code authority; unknown or inconsistent combinations are not silently equated.
+- Office archives: at most 1,000 entries and 50 MiB expanded; XLSX at most 10 sheets, 5,000 rows, 100 columns, and 100,000 inspected cells. Extracted text is bounded to 1,000,000 characters per document.
+- All entry points share two active runs with no waiting queue, a 15-second document worker deadline, and a 60-second run deadline. Shutdown terminates workers; restart marks unfinished runs interrupted/failed without retry. A stale mailbox lease also expires after 120 seconds on read.
+- XLSX formulas are neither evaluated nor resolved from cached values. Formulas, missing units, conflicting totals, unknown roles, or ambiguous pairs stay unresolved.
+- Explicit total gross weight takes precedence over individual weights. Normalization preserves company-name tokens and agency clauses; uncertain boundaries require review. Port names/codes retain their tokens without fuzzy or code/name equivalence. Comparison requires two present values with no pending confirmation.
 - Rules are a bounded baseline, not measured accuracy claims for arbitrary shipping documents. Runtime results are independent of evaluation ground truth.
 
 ## Local checks

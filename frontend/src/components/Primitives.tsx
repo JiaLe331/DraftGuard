@@ -6,17 +6,17 @@ import {
   CircleIcon,
   XIcon,
 } from '@phosphor-icons/react'
-import { workflowLabels, findingLabels, type Finding, type Workflow } from '../demo/model'
+import { statusLabels, type Finding, type Workflow } from '../mailbox/types'
 
 export function StatusBadge({ status }: { status: Workflow | Finding }) {
   const color =
-    status === 'MISMATCH'
+    status === 'MISMATCH' || status === 'DISCREPANCIES_FOUND' || status === 'FAILED'
       ? 'danger'
-      : status === 'attention' || status === 'NEEDS_REVIEW'
+      : status === 'REVIEW_REQUIRED' || status === 'NEEDS_REVIEW'
         ? 'warning'
-        : status === 'MATCH' || status === 'completed'
+        : status === 'MATCH'
           ? 'success'
-          : status === 'ready'
+          : status === 'READY'
             ? 'blue'
             : 'neutral'
   const Icon =
@@ -24,11 +24,10 @@ export function StatusBadge({ status }: { status: Workflow | Finding }) {
       ? CheckCircleIcon
       : color === 'warning' || color === 'danger'
         ? WarningCircleIcon
-        : status === 'waiting'
+        : status === 'WAITING_DOCUMENT'
           ? ClockIcon
           : CircleIcon
-  const label =
-    status in workflowLabels ? workflowLabels[status as Workflow] : findingLabels[status as Finding]
+  const label = statusLabels[status]
   return (
     <span className={`badge ${color}`}>
       <Icon size={14} weight="bold" aria-hidden="true" />

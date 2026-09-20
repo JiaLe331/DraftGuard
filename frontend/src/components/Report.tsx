@@ -1,105 +1,99 @@
-import {
-  currentVersion,
-  effectiveValue,
-  fieldLabels,
-  finding,
-  findingLabels,
-  summary,
-  normalize,
-  type Task,
-} from '../demo/model'
-export function Report({ task, revision }: { task: Task; revision: number }) {
-  const version = currentVersion(task, revision)
-  const reviews = task.reviews.filter((r) => r.revision === revision)
+import { analyzedAt, fieldLabels, statusLabels, type SampleDetail } from '../mailbox/types'
+export function Report({ task, preview = false }: { task: SampleDetail; preview?: boolean }) {
+  const run = task.current_run
+  const result = run?.result
+  if (!result || !run) return null
   return (
-    <article className="print-report">
-      <div className="eyebrow">DRAFTGUARD · SAMPLE REPORT</div>
-      <h1>Document verification report</h1>
+    <article className={`print-report ${preview ? 'report-preview' : ''}`}>
+      <div className="eyebrow">DRAFTGUARD · PROVIDED DATASET</div>
+      <h1>Document analysis report</h1>
       <p>
-        {task.reference} · {task.subject}
+        {task.id} · {task.subject}
+      </p>
+      <p>From: {task.sender}</p>
+      <p>
+        Generated {new Date().toLocaleString('en-GB')} · Source revision {task.revision}
       </p>
       <p>
-        {revision !== task.currentRevision ? 'HISTORICAL VERSION' : 'CURRENT VERSION'} · Revision{' '}
-        {revision} · Generated {new Date().toLocaleString('en-GB')}
+        {run.mode === 'precomputed' ? 'Precomputed' : 'On demand'} · Rules · {run.pipeline_version}{' '}
+        · Analyzed {analyzedAt(run.finished_at)}
       </p>
       <p>
-        Team-authored interactive prototype. These results are illustrative, not live AI analysis.
+        Run {run.id} · {statusLabels[result.workflow_state]}
       </p>
+      {task.latest_run?.status === 'FAILED' && (
+        <p>
+          Latest attempt failed: {task.latest_run.error?.message} This report contains the last
+          successful result, not a successful rerun.
+        </p>
+      )}
+      <h2>Source documents</h2>
+      {task.documents.map((doc) => (
+        <p key={doc.id}>
+          {doc.filename} · v{doc.version} · {doc.id}
+          <br />
+          SHA-256: {doc.sha256}
+        </p>
+      ))}
       <p>
-        {version.documents
-          .map((d) => `${d.role.toUpperCase()}: ${d.filename} (v${d.version})`)
-          .join(' · ')}
-      </p>
-      <p>
-        {revision === task.currentRevision
-          ? summary(task)
-          : 'Historical results; not the current check.'}
+        {result.coverage.checked}/7 fields checked · {result.known_defect_fields.length}{' '}
+        discrepancies.
       </p>
       <table>
         <thead>
           <tr>
             <th>Field</th>
-            <th>SI</th>
-            <th>Draft BL</th>
-            <th>Finding / evidence</th>
+            <th>SI: raw / normalized</th>
+            <th>BL: raw / normalized</th>
+            <th>Finding</th>
           </tr>
         </thead>
         <tbody>
-          {version.fields.map((field) => (
-            <tr key={field.key}>
-              <th>{fieldLabels[field.key]}</th>
-              <td>{effectiveValue(task, field, 'si', revision).value || 'Missing'}</td>
-              <td>{effectiveValue(task, field, 'bl', revision).value || 'Missing'}</td>
+          {result.fields.map((f) => (
+            <tr key={f.key}>
+              <th>{fieldLabels[f.key]}</th>
               <td>
-                {findingLabels[finding(task, field, revision)]}
+                {f.si.raw_value ?? 'Missing'}
                 <br />
-                SI: {field.si.evidence?.locator ?? 'No evidence'}
-                <br />
-                BL: {field.bl.evidence?.locator ?? 'No evidence'}
+                {f.si.normalized_value ?? 'Not established'}
               </td>
+              <td>
+                {f.bl.raw_value ?? 'Missing'}
+                <br />
+                {f.bl.normalized_value ?? 'Not established'}
+              </td>
+              <td>{statusLabels[f.finding]}</td>
             </tr>
           ))}
         </tbody>
       </table>
-      <h2>Source evidence</h2>
-      {version.fields.map((field) => (
-        <div key={field.key}>
-          <strong>{fieldLabels[field.key]}</strong>
-          <p>
-            SI machine value: {field.si.raw || 'Missing'}
-            <br />
-            SI normalized:{' '}
-            {normalize(field.key, effectiveValue(task, field, 'si', revision).value) || 'Missing'}
-            <br />
-            BL machine value: {field.bl.raw || 'Missing'}
-            <br />
-            BL normalized:{' '}
-            {normalize(field.key, effectiveValue(task, field, 'bl', revision).value) || 'Missing'}
-            <br />
-            SI: {field.si.evidence?.text ?? 'No usable source'}
-            <br />
-            BL: {field.bl.evidence?.text ?? 'No usable source'}
-          </p>
-        </div>
+      <h2>Source evidence and unresolved items</h2>
+      {result.fields.map((f) => (
+        <section key={f.key}>
+          <h3>{fieldLabels[f.key]}</h3>
+          {(['si', 'bl'] as const).map((role) => (
+            <div key={role}>
+              <p>
+                {role.toUpperCase()} · {f[role].value_state} · {f[role].reason.replaceAll('_', ' ')}
+              </p>
+              {f[role].evidence.map((e) => (
+                <p className="report-evidence" key={e.id}>
+                  {e.document_id} · {e.locator}
+                  <br />
+                  {e.excerpt}
+                </p>
+              ))}
+            </div>
+          ))}
+        </section>
       ))}
-      <h2>Review record</h2>
-      {reviews.length ? (
-        reviews.map((r) => (
-          <p key={r.id}>
-            {fieldLabels[r.field]} · {r.role.toUpperCase()} · {r.action} → {r.value}
-            <br />
-            {r.reason}
-            <br />
-            {r.actor} · {new Date(r.createdAt).toLocaleString('en-GB')}
-          </p>
-        ))
-      ) : (
-        <p>No field corrections or confirmations recorded.</p>
-      )}
+      {result.review_requirements.map((p, i) => (
+        <p key={i}>{p.message}</p>
+      ))}
+      <h2>Human review</h2>
       <p>
-        {task.completedRevision === revision
-          ? 'Completion acknowledged by Demo reviewer — unverified.'
-          : 'Completion has not been acknowledged for this version.'}
+        Machine-only results. No human corrections or completion acknowledgment have been recorded.
+        Reviewer identity is unverified.
       </p>
       <p>
         This report covers seven fields only. It is not legal approval, authorization to release

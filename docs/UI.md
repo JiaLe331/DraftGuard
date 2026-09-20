@@ -24,6 +24,10 @@ At 1280px and above, the workspace uses a comparison/evidence split. At intermed
 
 Routes: `/overview`, `/inbox`, `/tasks/:taskId`. Query parameters preserve search, filters, sorting, source selection, and revision. Returning from a task retains the queue context. Next task uses the originating filtered queue and skips completed or non-comparison tasks.
 
+The development **Local extraction** screens use `/extraction` and `/extraction/runs/:runId` and follow the same visual system. They use real documents and backend audit history, kept separate from sample reviews and **Reset demo**. Section, inbox search/filter/page, selected email, attachment, and source evidence are stored in the URL. Returning from a run restores the originating inbox or history view.
+
+Extraction fields and evidence appear side by side from 1280px; evidence sits below at narrower widths. Below 768px, each field becomes a card pairing its original and normalized values for the selected attachment. Evidence selection moves focus to the source panel on narrower screens. Blue marks an extracted value available for inspection, amber marks an unresolved value or processing problem, and green marks completed extraction. Each status also has text and a regular Phosphor icon; extraction completion does not indicate shipment approval. Printed extraction views retain the local-extraction label, run ID, pipeline version, and selected filename.
+
 The workspace has explicit loading, missing-task, missing-source, historical, unsaved-edit, storage-failure, and completion states. Storage writes complete before the UI announces success. Save failures retain the editable draft. Reset removes only this prototype's local storage key.
 
 ## Verification

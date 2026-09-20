@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import SecretStr
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     )
 
     app_env: str = "development"
+    local_data_dir: Path = Path(__file__).resolve().parents[1] / ".local"
     allowed_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
     supabase_url: str | None = None
     supabase_secret_key: SecretStr | None = None
@@ -20,3 +21,8 @@ class Settings(BaseSettings):
     gemini_api_key: SecretStr | None = None
     gemini_model: str | None = None
     demo_session_secret: SecretStr | None = None
+
+    @field_validator("local_data_dir")
+    @classmethod
+    def resolve_local_directory(cls, value: Path) -> Path:
+        return value if value.is_absolute() else Path(__file__).resolve().parents[1] / value

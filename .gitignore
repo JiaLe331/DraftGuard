@@ -20,3 +20,6 @@ coverage/
 *.log
 .DS_Store
 .vercel/
+
+# Local mailbox, source snapshots, and SQLite results
+/backend/.local/

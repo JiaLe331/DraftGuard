@@ -1,0 +1,22 @@
+from pathlib import Path
+
+from pydantic import SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=Path(__file__).resolve().parents[1] / ".env",
+        env_file_encoding="utf-8",
+        env_ignore_empty=True,
+        extra="ignore",
+    )
+
+    app_env: str = "development"
+    allowed_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    supabase_url: str | None = None
+    supabase_secret_key: SecretStr | None = None
+    supabase_storage_bucket: str | None = None
+    gemini_api_key: SecretStr | None = None
+    gemini_model: str | None = None
+    demo_session_secret: SecretStr | None = None

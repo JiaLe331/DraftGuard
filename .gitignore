@@ -1,0 +1,22 @@
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies, caches, and builds
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+coverage/
+*.egg-info/
+*.tsbuildinfo
+*.log
+.DS_Store
+.vercel/

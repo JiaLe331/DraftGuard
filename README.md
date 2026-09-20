@@ -46,6 +46,21 @@ For another checkout, replace `--source` with the absolute path to the provided 
 
 The default store is `backend/.local/mailbox.sqlite3` plus content-hashed files under `backend/.local/objects/`. This directory is ignored by Git. No dataset or analysis data is put in the frontend bundle or browser localStorage.
 
+## Interactive demo mailbox
+
+To start with both pending and precomputed emails, use a separate local store. Set `LOCAL_DATA_DIR=.local/demo-mailbox` in `backend/.env`, then run from `backend/`:
+
+```sh
+uv run --frozen python -m app.cli import-dataset \
+  --source "/absolute/path/to/data_v2" --analyze --defer-first 20
+```
+
+On a fresh store, the first 20 emails in dataset order remain genuinely unclassified and unanalyzed; the other 500 are precomputed. This is an import policy, not a hardcoded result or per-ID classification. The option never deletes existing runs: after a user analyzes a pending email, repeated imports preserve that result. Restart the backend after changing stores. The previous `.local/mailbox.sqlite3` and objects remain intact; switch `LOCAL_DATA_DIR` back to `.local` to reopen them.
+
+Choose **Awaiting analysis**, open an email, and select **Start analysis** in the compact attachment workbench. Real filenames, formats, and sizes link to the existing preview. Only two attachments initially appear; expand to see more. Emails without attachments can still be classified.
+
+The request starts immediately. A scan animation represents overall processing, not measured stages or percentages. Successful manual runs have a minimum four-second presentation window: if the backend finishes early, the UI continues the captions with **Preparing your results…** and opens the result automatically. There is no skip button or save announcement during loading. Slow requests have no additional wait. Errors appear immediately; reanalysis preserves the prior result. Backend timestamps and processing time are unchanged. Reduced motion disables animation and the presentation hold. Refreshing a saved task shows results immediately without replaying the animation.
+
 ## Team setup and data ownership
 
 Each teammate uses their own copy of the organizer dataset. After installing dependencies, run the import command from `backend/`, supplying your own source directory:
@@ -101,7 +116,7 @@ Open <http://127.0.0.1:5174/overview>. Keep this development mailbox bound to lo
 Search by email ID, subject, sender, or body. Inbox pages contain 50 emails in dataset order. Summary cards always cover the full mailbox. Dataset emails do not have a separate received-at field; the UI displays actual analysis times instead.
 
 - **email_004:** Two differences: consignee and notify party. Inspect the real TXT excerpts.
-- **email_160:** The PDF SI yields seven fields; its actual gross weight is `23,702 KG`. Open the original PDF at the evidence page.
+- **email_160:** The PDF SI yields seven fields; its actual gross weight is `23,702 KG`. Open the original PDF in the in-page viewer at the evidence page.
 - **email_055:** XLSX SI and DOCX BL. Six fields match; the SI weight `243588` has no explicit unit, so weight remains unresolved. The BL's explicit KGS label supports normalization of `243,588`. No unit is guessed to force a match.
 - **email_501:** An invoice supplied instead of the BL requires replacement.
 - **email_512:** Actual image-only PDFs display **Visual extraction required**. No invented AI candidates are shown.
@@ -118,7 +133,7 @@ The former hand-authored prototype and browser snapshots are no longer used. Hum
 In `backend/.env`, set `APP_ENV=development` and `ENABLE_DEV_EXTRACTION=true`, then
 restart the backend. Open <http://127.0.0.1:5173/inbox>:
 
-- **Inbox:** import the dataset as described above, select `email_004`, and click **Analyze email** to classify the email, extract its attachments, and compare SI/BL fields.
+- **Inbox:** import the dataset as described above, select `email_004`, and click **Start analysis** to classify the email, extract its attachments, and compare SI/BL fields.
 - **Upload document:** use the action in Inbox, then choose `backend/tests/fixtures/extraction/email_160_SI.pdf` to inspect seven fields, page evidence, and the original PDF.
 - **Audit Trail:** open `/audit` from the sidebar for live backend steps, source evidence, selection decisions, review reasons, and failures. Extraction results include a direct link to their audit. Processing continues through navigation and refresh.
 - **Saved history:** reopen runs through Audit Trail, choose **View extraction results**, or download the full audit JSON. History survives backend restarts in `backend/.local/extraction-audit.sqlite3` (override with `DEV_AUDIT_DB`). New mailbox analysis runs also appear in this audit history.
@@ -154,6 +169,7 @@ uv run --frozen python -m app.extraction tests/fixtures/extraction/email_160_SI.
 
 The command prints seven fields, original/canonical values, source evidence, and review issues as JSON. A successful command can still report missing or ambiguous values; inspect `needs_review`. See [the extraction guide](docs/EXTRACTION.md) for all formats, limits, tests, and the Python interface for backend integration.
 
+Attachment buttons and **Open original** now open an in-page preview: original TXT text, PDF.js-rendered PDF pages, or labeled extracted DOCX/XLSX content. PDF viewing does not depend on a browser PDF plugin. PDF pages automatically fit the preview width. Use **Download original** for the registered file. Missing/unreadable content shows an explicit message, not a blank tab.
 
 ## API and configuration
 
@@ -206,3 +222,5 @@ uv run --frozen pytest
 Tests cover ingestion boundaries, source versions, evidence, four formats, classification ambiguity, missing data, failed/stale/concurrent runs, persistence, API isolation, pagination, and frontend failure/retry/report journeys. The organizer-data integration test uses the workspace dataset when present; otherwise set `DATASET_DIR=/absolute/path/to/data_v2`. It explicitly skips when that external input is absent; synthetic unit tests still run without it.
 
 There is no GitHub Actions workflow. Build output, environment files, dependencies, caches, and local mailbox data are ignored. See [the PRD](docs/PRD.md) for the eventual release requirements and [UI notes](docs/UI.md) for current behavior. New code, comments, logs, documentation, and UI copy use English.
+
+The analysis indicator uses one changing caption beneath its spinner instead of a static workflow explanation. Saved-run captions reflect actual classification, parsing, and comparison coverage; the four-second presentation does not change backend execution or timestamps.

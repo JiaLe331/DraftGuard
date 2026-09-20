@@ -116,12 +116,14 @@ The former hand-authored prototype and browser snapshots are no longer used. Hum
 ## Local extraction
 
 In `backend/.env`, set `APP_ENV=development` and `ENABLE_DEV_EXTRACTION=true`, then
-restart the backend. Open <http://127.0.0.1:5173/extraction>:
+restart the backend. Open <http://127.0.0.1:5173/inbox>:
 
-- **Dataset inbox:** select `email_004` and click **Extract attachments** to process both listed files automatically. The default bundle is the sibling `sdoc-hackathon-bundle`; override with `DATASET_DIR` if needed.
-- **Upload a document:** choose `backend/tests/fixtures/extraction/email_160_SI.pdf` to inspect seven fields, page evidence, and the original PDF.
+- **Inbox:** import the dataset as described above, select `email_004`, and click **Analyze email** to classify the email, extract its attachments, and compare SI/BL fields.
+- **Upload document:** use the action in Inbox, then choose `backend/tests/fixtures/extraction/email_160_SI.pdf` to inspect seven fields, page evidence, and the original PDF.
 - **Audit Trail:** open `/audit` from the sidebar for live backend steps, source evidence, selection decisions, review reasons, and failures. Extraction results include a direct link to their audit. Processing continues through navigation and refresh.
-- **History:** reopen saved runs and download the full audit JSON. History survives backend restarts in `backend/.local/extraction-audit.sqlite3` (override with `DEV_AUDIT_DB`). New mailbox analysis runs also appear in this audit history.
+- **Saved history:** reopen runs through Audit Trail, choose **View extraction results**, or download the full audit JSON. History survives backend restarts in `backend/.local/extraction-audit.sqlite3` (override with `DEV_AUDIT_DB`). New mailbox analysis runs also appear in this audit history.
+
+The separate Extraction sidebar entry has been removed. Old `/extraction` bookmarks redirect to Inbox; upload/history bookmarks redirect to the corresponding upload or audit screen. Existing `/extraction/runs/:runId` result links still work.
 
 The Inbox's **Analyze / Reanalyze** action keeps email classification and SI/BL
 comparison in `app.documents.analysis`, but uses the same `extract_document(...)`

@@ -2,8 +2,8 @@
 
 This milestone implements rule-based extraction from one TXT, PDF, DOCX, or XLSX
 document. It returns seven shipment fields with original values, canonical values,
-source evidence, and review issues. A development API and the **Local extraction**
-page now connect that extractor to uploads, dataset emails, and SQLite audit history.
+source evidence, and review issues. A development API connects that extractor to
+Inbox uploads, dataset emails, and SQLite audit history.
 The Inbox also uses this shared extractor inside its email classification and SI/BL
 comparison workflow. OCR, Gemini, and live mailbox connections remain future work.
 
@@ -30,22 +30,22 @@ comparison workflow. OCR, Gemini, and live mailbox connections remain future wor
    pnpm dev --host 127.0.0.1
    ```
 
-4. Open [Local extraction](http://127.0.0.1:5173/extraction). The navigation link
-   appears when the backend health response enables `capabilities.development_extraction`.
-   No cloud credentials or Docker services are needed.
+4. Open [Inbox](http://127.0.0.1:5173/inbox). **Upload document** and the **Audit Trail**
+   sidebar link appear when the backend health response enables
+   `capabilities.development_extraction`. No cloud credentials or Docker services are needed.
 
-**Dataset inbox:** the default view contains the 126 emails with attachments.
-Uncheck **With attachments only** to browse all 520 emails. Search `email_004`,
-select the email, then click **Extract attachments**. Both listed TXT files are
-read directly from the bundle. Merely opening an email never processes it.
+**Dataset emails:** import the dataset using the [README command](../README.md)
+before starting the backend. Search `email_004` in Inbox, open the email, and click
+**Analyze email**. This classifies the email, extracts both attachments, and compares
+the SI/BL fields. Merely opening an email never processes it.
 
-**Upload:** select `backend/tests/fixtures/extraction/email_160_SI.pdf`, optionally
+**Upload:** click **Upload document** in Inbox, select `backend/tests/fixtures/extraction/email_160_SI.pdf`, optionally
 choose SI, and click **Extract document**. The result includes all seven fields,
 page evidence, and an explicit total gross weight of `23702` kg. Open **View original
 PDF** or download the original. Browser support determines whether PDF viewing is inline.
 
-**History:** reopen any saved run, including after refreshing or restarting the
-backend. Click a field's evidence to select its retained source unit. Use the
+**History:** open **Audit Trail**, select a saved run, and choose **View extraction
+results**, including after refreshing or restarting the backend. Click a field's evidence to select its retained source unit. Use the
 attachment buttons to switch documents. Select **View live audit** while processing
 or **View audit trail** afterward to open the separate Audit Trail page.
 **Download audit JSON** exports the complete saved run; originals download separately.
@@ -61,12 +61,15 @@ The frontend starts runs asynchronously and opens results immediately. Active
 results and events refresh every second while visible; the audit list refreshes
 every five seconds. Navigating away or refreshing does not cancel a saved run.
 Completed runs stop polling. Connection failures retain the last displayed snapshot.
-Extraction History remains a quick route to saved results and their audits.
+The separate Extraction page has been removed from navigation. Old `/extraction`
+bookmarks redirect to Inbox; old upload/history bookmarks redirect to the upload or
+audit screen. Saved `/extraction/runs/:runId` links still open their original results.
 
 Try `email_055` for XLSX/DOCX evidence and the SI's `MISSING_WEIGHT_UNIT` issue;
 try `email_516` for a missing SI weight which remains missing despite the BL value.
-`email_512` includes an image-only PDF and needs visual review. An email without
-attachments can save an explicit **No attachments** result.
+`email_512` includes an image-only PDF and needs visual review. Inbox classifies
+emails without attachments and reports missing documents when a comparison was requested.
+The direct dataset extraction API still supports explicit **No attachments** results.
 
 Extraction finished means the processing completed. **Needs review** means one or
 more values remain unresolved; **Finished with errors** means at least one attachment

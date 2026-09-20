@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from app.config import Settings
@@ -14,9 +14,8 @@ class AnalysisRequest(BaseModel):
     expected_revision: int = Field(ge=1)
 
 
-def build_router(settings: Settings) -> APIRouter:
+def build_router(settings: Settings, store: Store) -> APIRouter:
     router = APIRouter(prefix="/api/v1")
-    store = Store(settings.local_data_dir)
 
     def run(operation):
         try:
@@ -27,7 +26,7 @@ def build_router(settings: Settings) -> APIRouter:
                 detail={
                     "code": exc.code,
                     "message": str(exc),
-                    "retryable": exc.status == 409,
+                    "retryable": exc.status in {409, 503},
                     "request_id": str(uuid4()),
                 },
             ) from exc
@@ -82,12 +81,17 @@ def build_router(settings: Settings) -> APIRouter:
         )
 
     @router.post("/dev/samples/{email_id}/analyze")
-    def reanalyze(email_id: str, payload: AnalysisRequest, request: Request):
+    def reanalyze(email_id: str, payload: AnalysisRequest, request: Request, wait: bool = True):
         origin = request.headers.get("origin")
         if origin and origin not in settings.allowed_origins:
             raise HTTPException(
                 403, detail={"code": "origin_denied", "message": "This origin is not allowed."}
             )
-        return run(lambda: store.analyze(email_id, payload.expected_revision))
+        result = run(
+            lambda: store.analyze(
+                email_id, payload.expected_revision, request_id=request.state.request_id, wait=wait
+            )
+        )
+        return JSONResponse(result, status_code=200 if wait else 202)
 
     return router

@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 
 from app.config import Settings
+from app.dev_extraction.service import RunService
+from app.dev_extraction.store import AuditStore
 from app.documents.analysis import PIPELINE_VERSION
 from app.store import Store, StoreError
 
@@ -19,7 +21,11 @@ def main():
     settings = Settings()
     if settings.app_env != "development":
         parser.error("Local dataset import is only available in development.")
-    store = Store(settings.local_data_dir)
+    audit = AuditStore(settings.dev_audit_db)
+    audit.initialize()
+    service = RunService(audit, settings)
+    store = Store(settings.local_data_dir, service)
+    store.recover_audit_runs()
     try:
         changed = store.import_dataset(args.source)
         print(f"Imported {len(changed)} new or changed emails.", flush=True)
@@ -38,6 +44,8 @@ def main():
         print(json.dumps(store.list_samples(limit=1)["summary"], indent=2))
     except StoreError as exc:
         parser.exit(1, f"{exc.code}: {exc}\n")
+    finally:
+        service.shutdown()
 
 
 if __name__ == "__main__":

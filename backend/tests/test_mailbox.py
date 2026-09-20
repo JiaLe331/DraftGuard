@@ -1,5 +1,4 @@
 import json
-import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
@@ -8,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from app.dev_extraction import service as extraction_service
 from app.main import create_app
 from app.store import Store, StoreError
 
@@ -89,7 +89,9 @@ def test_import_rejects_outside_paths_and_duplicate_ids_before_writes(tmp_path):
 
 def test_api_pagination_search_global_counts_content_and_production_gate(tmp_path):
     root = dataset(tmp_path / "input", 3)
-    settings = Settings(local_data_dir=tmp_path / "local", _env_file=None)
+    settings = Settings(
+        local_data_dir=tmp_path / "local", dev_audit_db=tmp_path / "audit.sqlite3", _env_file=None
+    )
     store = Store(settings.local_data_dir)
     store.import_dataset(root)
     with TestClient(create_app(settings)) as client:
@@ -102,7 +104,7 @@ def test_api_pagination_search_global_counts_content_and_production_gate(tmp_pat
         detail = response.json()
         assert detail["workflow_state"] == "READY"
         content = f"/api/v1/samples/email_000/documents/{detail['documents'][0]['id']}/content"
-        assert client.get(content).text == SI
+        assert client.get(content).content == (root / "attachments/email_000_SI.txt").read_bytes()
         assert client.get(content.replace("/email_000/", "/email_001/")).status_code == 404
         assert client.get("/api/v1/samples?limit=9999").status_code == 422
         assert (
@@ -143,17 +145,17 @@ def test_failed_rerun_preserves_success_and_retry_recovers(tmp_path, monkeypatch
     store = Store(tmp_path / "local")
     store.import_dataset(dataset(tmp_path / "input"))
     original = store.analyze("email_000", 1)
-    worker = subprocess.run
+    worker = extraction_service.run_worker
 
     def timeout(*args, **kwargs):
-        raise subprocess.TimeoutExpired("worker", 30)
+        return None, [], {"code": "EXTRACTION_TIMEOUT", "message": "Test worker timed out."}
 
-    monkeypatch.setattr(subprocess, "run", timeout)
+    monkeypatch.setattr(extraction_service, "run_worker", timeout)
     failed = store.analyze("email_000", 1)
     assert failed["workflow_state"] == "FAILED"
     assert failed["current_run"]["id"] == original["current_run"]["id"]
     assert failed["latest_run"]["error"]["code"] == "analysis_timeout"
-    monkeypatch.setattr(subprocess, "run", worker)
+    monkeypatch.setattr(extraction_service, "run_worker", worker)
     recovered = store.analyze("email_000", 1)
     assert recovered["workflow_state"] == "READY"
     assert len(recovered["runs"]) == 3
@@ -163,14 +165,14 @@ def test_duplicate_and_stale_runs_cannot_overwrite_current(tmp_path, monkeypatch
     store = Store(tmp_path / "local")
     store.import_dataset(dataset(tmp_path / "input"))
     entered, release = Event(), Event()
-    worker = subprocess.run
+    worker = extraction_service.run_worker
 
     def blocked(*args, **kwargs):
         entered.set()
         assert release.wait(10)
         return worker(*args, **kwargs)
 
-    monkeypatch.setattr(subprocess, "run", blocked)
+    monkeypatch.setattr(extraction_service, "run_worker", blocked)
     with ThreadPoolExecutor(max_workers=1) as pool:
         pending = pool.submit(store.analyze, "email_000", 1)
         assert entered.wait(5)

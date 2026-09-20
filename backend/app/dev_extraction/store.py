@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+import threading
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,6 +40,8 @@ def interrupt(run, message):
 class AuditStore:
     def __init__(self, path: Path):
         self.path = path
+        self._initialized = False
+        self._initialization_lock = threading.Lock()
 
     @contextmanager
     def connect(self):
@@ -50,6 +53,11 @@ class AuditStore:
                 yield connection
         finally:
             connection.close()
+
+    def ensure_initialized(self):
+        with self._initialization_lock:
+            if not self._initialized:
+                self.initialize()
 
     def initialize(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -113,6 +121,8 @@ class AuditStore:
                 self._append(db, run, [event("run", "INTERRUPTED", message)])
                 self._write(db, run)
 
+        self._initialized = True
+
     @staticmethod
     def _append(db, run, records):
         sequence = db.execute(
@@ -153,7 +163,7 @@ class AuditStore:
         if cursor.rowcount != 1:
             raise sqlite3.IntegrityError("Missing run")
 
-    def create(self, run: dict, records=()):
+    def create(self, run: dict, records=(), commit=None):
         with self.connect() as db:
             db.execute(
                 "INSERT INTO runs VALUES (?, ?, ?, ?)",
@@ -165,14 +175,18 @@ class AuditStore:
                 ),
             )
             self._append(db, run, records)
+            if commit:
+                commit(db, run)
 
-    def save(self, run: dict, records=(), original=None):
+    def save(self, run: dict, records=(), original=None, commit=None):
         # Source checkpoints, events, and final results become visible atomically.
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             if original is not None:
                 db.execute("INSERT INTO originals VALUES (?, ?, ?, ?)", original)
             self._append(db, run, records)
+            if commit:
+                commit(db, run)
             self._write(db, run)
 
     def save_original(self, run_id: str, doc_id: str, filename: str, content: bytes):

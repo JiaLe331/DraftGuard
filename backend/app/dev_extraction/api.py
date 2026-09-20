@@ -124,7 +124,7 @@ def runs(
     offset: int = 0,
     q: str = "",
     status: Literal["RUNNING", "SUCCEEDED", "FAILED", "INTERRUPTED"] | None = None,
-    source_type: Literal["upload", "dataset_email"] | None = None,
+    source_type: Literal["upload", "dataset_email", "mailbox_email"] | None = None,
     needs_review: bool | None = None,
 ):
     page_bounds(limit, offset)

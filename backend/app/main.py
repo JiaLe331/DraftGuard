@@ -16,6 +16,7 @@ from app.dev_extraction.dataset import DatasetError
 from app.dev_extraction.middleware import InboundGuard, error_response
 from app.dev_extraction.service import RunService
 from app.dev_extraction.store import AuditStore
+from app.store import Store
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -25,10 +26,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(application):
         if settings.dev_extraction_enabled:
             application.state.audit_store.initialize()
+        if settings.app_env == "development":
+            application.state.mailbox_store.recover_audit_runs()
         try:
             yield
         finally:
-            if settings.dev_extraction_enabled:
+            if settings.app_env == "development":
                 await run_in_threadpool(application.state.run_service.shutdown)
 
     application = FastAPI(title="DraftGuard API", version="0.1.0", lifespan=lifespan)
@@ -43,12 +46,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     application.include_router(health_router)
     if settings.app_env == "development":
-        application.include_router(build_router(settings))
-    if settings.dev_extraction_enabled:
         store = AuditStore(settings.dev_audit_db)
         application.state.audit_store = store
         application.state.run_service = RunService(store, settings)
-        application.include_router(dev_router)
+        application.state.mailbox_store = Store(
+            settings.local_data_dir, application.state.run_service
+        )
+        application.include_router(build_router(settings, application.state.mailbox_store))
+        if settings.dev_extraction_enabled:
+            application.include_router(dev_router)
 
     @application.exception_handler(DatasetError)
     async def dataset_error(request: Request, exc: DatasetError):

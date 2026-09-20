@@ -1,39 +1,14 @@
+"""Email classification and comparison over the shared extraction contract."""
+
 import re
-from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from app.documents.parsers import parse_document
+from app.extraction import extract_document
+from app.extraction.models import FIELD_KEYS
 
-PIPELINE_VERSION = "rules-1"
-FIELDS = (
-    "shipper",
-    "consignee",
-    "notify_party",
-    "port_of_loading",
-    "port_of_discharge",
-    "container_count",
-    "gross_weight_kg",
-)
+PIPELINE_VERSION = "mailbox-shared-2"
+FIELDS = FIELD_KEYS
 CATEGORIES = ("BL_COMPARISON", "SI_REQUEST", "INVOICE_QUERY", "GENERAL", "SPAM")
-LABELS = {
-    "shipper": r"shipper(?:/exporter)?",
-    "consignee": r"consignee|to the order of",
-    "notify_party": r"notify party/intermediate consignee|notify party|notify",
-    "port_of_loading": r"port of loading|load port|pol",
-    "port_of_discharge": r"port of discharge|discharge port|pod",
-    "container_count": r"no\. of containers(?: or packages)?|total containers|container count",
-    "gross_weight_kg": r"(?:total\s+)?gross\s*(?:weight|wt)",
-}
-PATTERNS = {
-    key: re.compile(
-        r"^\s*(?P<label>(?:"
-        + label
-        + r")(?:\s*\([^)]*\)|[毛重■]+)*)(?:\s*[:|]\s*|\s+|$)(?P<value>.*)$",
-        re.I | re.S,
-    )
-    for key, label in LABELS.items()
-}
-MISSING = re.compile(r"^(?:N/?A|TBA|TBD|NONE|NULL|[-_?\s]*)$", re.I)
 
 
 def classify(subject: str, body: str) -> dict:
@@ -78,155 +53,73 @@ def classify(subject: str, body: str) -> dict:
     }
 
 
-def detect_role(units: list[dict]) -> str | None:
-    title = "\n".join(u["text"] for u in units[:4]).upper()
-    if re.search(r"COMMERCIAL INVOICE|PACKING LIST|CERTIFICATE OF ORIGIN", title):
-        return "other"
-    instruction = bool(
-        re.search(r"SHIPPING INSTRUCTION|(?:BILL OF LADING|B/?L) INSTRUCTION", title)
+def locator(unit: dict) -> str:
+    if unit.get("page"):
+        return f"Page {unit['page']}"
+    if unit.get("sheet"):
+        return f"{unit['sheet']}!{unit['cell']}"
+    if unit.get("table"):
+        return f"Table {unit['table']}, row {unit['row']}, cell {unit['column']}"
+    if unit.get("paragraph"):
+        return f"Paragraph {unit['paragraph']}"
+    return f"Line {unit['line']}"
+
+
+def empty_value(state="MISSING", reason="missing_value"):
+    return dict(
+        raw_value=None,
+        normalized_value=None,
+        value_state=state,
+        method="rule",
+        requires_human_confirmation=True,
+        reason=reason,
+        evidence=[],
     )
-    bill = bool(re.search(r"BILL OF LADING(?!\s+INSTRUCTION)", title))
-    if instruction and not bill:
-        return "si"
-    if bill and not instruction:
-        return "bl"
-    return None
 
 
-# Bounded aliases observed in the provided source documents, not a port-code authority.
-PORT_LABELS = {
-    "INNSA": "NHAVA SHEVA, INDIA",
-    "GNCKY": "CONAKRY, GUINEA",
-    "NGAPP": "APAPA, NIGERIA",
-    "JOAQB": "AQABA, JORDAN",
-    "ILASH": "ASHDOD, ISRAEL",
-    "USBAL": "BALTIMORE, US",
-    "AUBNE": "BRISBANE, AUSTRALIA",
-    "IDBUA": "BUATAN, INDONESIA",
-    "KRPUS": "BUSAN, SOUTH KOREA",
-    "PECLL": "CALLAO, PERU",
-    "PHCEB": "CEBU, PHILIPPINES",
-    "AUFRE": "FREMANTLE, AUSTRALIA",
-    "PLGDN": "GDANSK, POLAND",
-    "VNSGN": "HOCHIMINH CITY, VIETNAM",
-    "USHOU": "HOUSTON, US",
-    "AEJEA": "JEBEL ALI, UAE",
-    "PKKHI": "KARACHI, PAKISTAN",
-    "LTKLJ": "KLAIPEDA, LITHUANIA",
-    "SIKOP": "KOPER, SLOVENIA",
-    "USLGB": "LONG BEACH, US",
-    "TRMER": "MERSIN, TURKEY",
-    "KEMBA": "MOMBASA, KENYA",
-    "CNNTG": "NANTONG, CHINA",
-    "USNYC": "NEW YORK, US",
-    "KRPTK": "PYEONGTAEK, SOUTH KOREA",
-    "MYPKG": "PORT KLANG (WESTPORT), MALAYSIA",
-    "USSAV": "SAVANNAH, US",
-    "SGSIN": "SINGAPORE",
-    "CLVAP": "VALPARAISO, CHILE",
-    "MMRGN": "YANGON, MYANMAR",
-}
-
-
-def normalize(key: str, raw: str, label: str) -> tuple[str | None, str]:
-    text = re.sub(r"\s+", " ", raw).strip().upper()
-    if MISSING.fullmatch(text):
-        return None, "missing_value"
-    if "FORMULA RESULT UNAVAILABLE" in text:
-        return None, "formula_result_unavailable"
-    if key == "container_count":
-        match = re.fullmatch(r"(\d+)\s*(?:[X×]\s*\d{2}\s*['’]?\s*[A-Z]+)?", text)
-        if not match or ("packages" in label.lower() and not re.search(r"[X×]", text)):
-            return None, "ambiguous_container_count"
-        return str(int(match[1])), "explicit_container_count"
-    if key == "gross_weight_kg":
-        match = re.fullmatch(
-            r"(\d+(?:,\d{3})*(?:\.\d+)?)\s*(KG[S]?|KILOGRAMS?|MTS?|TONNES?)?", text
-        )
-        if not match:
-            return None, "ambiguous_weight"
-        numeric, unit = match.groups()
-        if "," in numeric and not re.fullmatch(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?", numeric):
-            return None, "ambiguous_weight"
-        if not unit:
-            found = re.search(r"\b(KGS?|KILOGRAMS?|MTS?|TONNES?)\b", label.upper())
-            unit = found[1] if found else None
-        if not unit:
-            return None, "weight_unit_required"
-        try:
-            value = Decimal(numeric.replace(",", ""))
-            if unit in {"MT", "MTS", "TONNE", "TONNES"}:
-                value *= 1000
-            canonical = format(value, "f")
-            if "." in canonical:
-                canonical = canonical.rstrip("0").rstrip(".")
-            return canonical, "explicit_weight_unit_to_kg"
-        except InvalidOperation:
-            return None, "ambiguous_weight"
-    if key in {"port_of_loading", "port_of_discharge"}:
-        match = re.fullmatch(r"(.+)\s+\(([A-Z]{5})\)", text)
-        if match and PORT_LABELS.get(match[2]) == match[1]:
-            return match[1], "documented_port_label_alias"
-    return text, "whitespace_and_case"
-
-
-def empty_value(state: str = "MISSING", reason: str = "missing_value") -> dict:
+def adapt_document(document: dict) -> dict:
+    """Keep mailbox response names; values and evidence come only from extraction."""
+    extracted = document.get("result")
+    units = [
+        {**unit, "id": unit["unit_id"], "locator": locator(unit)}
+        for unit in (extracted or {}).get("source_units", document.get("source_units", []))
+    ]
+    by_id = {unit["id"]: unit for unit in units}
+    values = {}
+    for field in (extracted or {}).get("fields", []):
+        problems = [i for i in extracted["issues"] if i.get("field") == field["field"]]
+        evidence = []
+        for ref in field["evidence"]:
+            unit = by_id[ref["unit_id"]]
+            if ref["document_id"] != document["document_id"] or ref["excerpt"] not in unit["text"]:
+                raise ValueError("Shared extraction returned invalid source evidence")
+            evidence.append({**unit, **ref})
+        values[field["field"]] = {
+            **field,
+            "evidence": evidence,
+            "reason": ", ".join(i["code"] for i in problems) or "shared_extractor",
+        }
+    role = (extracted or {}).get("detected_role")
+    issues = (extracted or {}).get("issues", [])
+    if not role and any(i["code"] == "WRONG_DOCUMENT_TYPE" for i in issues):
+        role = "other"
+    error = document.get("error")
+    if not error and extracted and extracted["parsing_status"] != "READABLE":
+        error = next(iter(issues), None)
     return {
-        "raw_value": None,
-        "normalized_value": None,
-        "value_state": state,
-        "method": "rule",
-        "requires_human_confirmation": True,
-        "reason": reason,
-        "evidence": [],
+        "id": document["document_id"],
+        "role": role.lower() if role else None,
+        "state": "PARSED"
+        if extracted and extracted["parsing_status"] == "READABLE"
+        else "UNREADABLE",
+        "units": units,
+        "error": error,
+        "values": values,
+        "extraction": extracted,
     }
 
 
-def extract(units: list[dict], key: str) -> dict:
-    candidates = []
-    for unit in units:
-        matched = PATTERNS[key].match(unit["text"])
-        if not matched:
-            continue
-        label, raw = matched.group("label", "value")
-        # The first line/cell segment holds the party name, not its address.
-        raw = raw.split("\n")[0].split(" | ")[0].strip()
-        if not raw:
-            continue
-        canonical, rule = normalize(key, raw, label)
-        state = (
-            "PRESENT"
-            if canonical is not None
-            else ("MISSING" if rule == "missing_value" else "AMBIGUOUS")
-        )
-        candidates.append(
-            {
-                "raw_value": raw,
-                "normalized_value": canonical,
-                "value_state": state,
-                "method": "rule",
-                "requires_human_confirmation": state != "PRESENT",
-                "reason": rule,
-                "evidence": [{**unit, "excerpt": unit["text"], "verified": True}],
-                "total": label.strip().lower().startswith("total"),
-            }
-        )
-    if key == "gross_weight_kg" and any(c["total"] for c in candidates):
-        candidates = [c for c in candidates if c["total"]]
-    if not candidates:
-        return empty_value()
-    for candidate in candidates:
-        candidate.pop("total")
-    if len({(c["normalized_value"], c["value_state"]) for c in candidates}) != 1:
-        return {
-            **empty_value("AMBIGUOUS", "conflicting_source_values"),
-            "evidence": [e for c in candidates for e in c["evidence"]],
-        }
-    return candidates[0]
-
-
-def analyze(email: dict, documents: list[dict]) -> dict:
-    classification = classify(email["subject"], email["body"])
+def compare(classification: dict, documents: list[dict], emit=None) -> dict:
     result = {
         "classification": classification,
         "documents": [],
@@ -237,38 +130,22 @@ def analyze(email: dict, documents: list[dict]) -> dict:
         "workflow_state": "NOT_APPLICABLE",
         "processing_status": "SUCCEEDED",
     }
+    requirements = result["review_requirements"]
     if classification["category"] is None:
         result["workflow_state"] = "REVIEW_REQUIRED"
-        result["review_requirements"].append(
-            {"code": "classification_review", "message": classification["reason"]}
-        )
+        requirements.append({"code": "classification_review", "message": classification["reason"]})
         return result
     if classification["category"] != "BL_COMPARISON":
         return result
-    requirements = result["review_requirements"]
-    for doc in documents:
-        parsed = parse_document(Path(doc["path"]), doc["filename"], doc["id"])
-        role = detect_role(parsed["units"]) if parsed["state"] == "PARSED" else None
-        result["documents"].append({"id": doc["id"], "role": role, **parsed})
-        if parsed["error"]:
-            requirements.append({**parsed["error"], "document_id": doc["id"]})
-        elif role == "other":
-            requirements.append(
-                {
-                    "code": "wrong_doc_type",
-                    "document_id": doc["id"],
-                    "message": "This attachment is not an SI or draft BL.",
-                }
-            )
-        elif role is None:
-            requirements.append(
-                {
-                    "code": "document_role_required",
-                    "document_id": doc["id"],
-                    "message": "Document role could not be established from its content.",
-                }
-            )
     selected = {}
+    for document in documents:
+        adapted = adapt_document(document)
+        result["documents"].append(adapted)
+        if adapted["error"]:
+            requirements.append({**adapted["error"], "document_id": adapted["id"]})
+        for issue in (adapted["extraction"] or {}).get("issues", []):
+            if issue != adapted["error"]:
+                requirements.append({**issue, "document_id": adapted["id"]})
     for role in ("si", "bl"):
         options = [d for d in result["documents"] if d["role"] == role]
         if len(options) == 1:
@@ -280,6 +157,14 @@ def analyze(email: dict, documents: list[dict]) -> dict:
                     "message": f"Multiple {role.upper()} documents require pair selection.",
                 }
             )
+    if emit:
+        emit(
+            "pair_selection",
+            "SUCCEEDED" if len(selected) == 2 else "NEEDS_REVIEW",
+            "SI and BL document roles checked for a unique pair.",
+            selected_document_ids={role: doc["id"] for role, doc in selected.items()},
+            rule="unique_document_per_role",
+        )
     if len(documents) < 2:
         requirements.append(
             {
@@ -289,12 +174,17 @@ def analyze(email: dict, documents: list[dict]) -> dict:
         )
     for key in FIELDS:
         sides = {
-            role: extract(selected[role]["units"], key)
+            role: selected[role]["values"].get(
+                key, empty_value("UNREADABLE", "source_not_selected")
+            )
             if role in selected
             else empty_value("UNREADABLE", "source_not_selected")
             for role in ("si", "bl")
         }
-        if all(side["value_state"] == "PRESENT" for side in sides.values()):
+        if all(
+            v["value_state"] == "PRESENT" and not v["requires_human_confirmation"]
+            for v in sides.values()
+        ):
             finding = (
                 "MATCH"
                 if sides["si"]["normalized_value"] == sides["bl"]["normalized_value"]
@@ -306,6 +196,17 @@ def analyze(email: dict, documents: list[dict]) -> dict:
         if finding == "MISMATCH":
             result["known_defect_fields"].append(key)
         result["fields"].append({"key": key, **sides, "finding": finding})
+        if emit:
+            emit(
+                "comparison",
+                "SUCCEEDED" if finding == "MATCH" else "NEEDS_REVIEW",
+                f"{key.replace('_', ' ').capitalize()}: {finding.replace('_', ' ').lower()}.",
+                field=key,
+                finding=finding,
+                rule="exact_normalized_values_with_verified_evidence",
+                si=sides["si"],
+                bl=sides["bl"],
+            )
     if any(f["finding"] == "NEEDS_REVIEW" for f in result["fields"]):
         requirements.append(
             {
@@ -322,3 +223,14 @@ def analyze(email: dict, documents: list[dict]) -> dict:
     else:
         result["workflow_state"] = "READY"
     return result
+
+
+def analyze(email: dict, documents: list[dict]) -> dict:
+    """In-process convenience; persisted mailbox runs use the bounded run service."""
+    classification = classify(email["subject"], email["body"])
+    results = []
+    if classification["category"] == "BL_COMPARISON":
+        for doc in documents:
+            result = extract_document(Path(doc["path"]).read_bytes(), doc["filename"], doc["id"])
+            results.append({"document_id": doc["id"], "result": result.model_dump(mode="json")})
+    return compare(classification, results)

@@ -44,6 +44,7 @@ def settings(tmp_path):
     return Settings(
         _env_file=None,
         enable_dev_extraction=True,
+        local_data_dir=tmp_path / "mailbox",
         dataset_dir=root,
         dev_audit_db=tmp_path / "audit.sqlite3",
     )

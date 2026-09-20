@@ -4,16 +4,22 @@ import hashlib
 import json
 import re
 import sqlite3
-import subprocess
-import sys
+import threading
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from time import perf_counter
 from uuid import uuid4
 
-from app.documents.analysis import PIPELINE_VERSION, analyze
-from app.documents.parsers import EXTENSIONS, MAX_BYTES
+from app.config import Settings
+from app.dev_extraction.dataset import DatasetError
+from app.dev_extraction.service import DocumentInput, RunService
+from app.dev_extraction.store import AuditStore
+from app.documents.analysis import PIPELINE_VERSION
+from app.documents.workflow import MailboxWorkflow
+from app.extraction.models import ExtractionLimits
+
+EXTENSIONS = {".txt", ".pdf", ".docx", ".xlsx"}
+MAX_BYTES = ExtractionLimits().max_file_bytes
 
 
 class StoreError(Exception):
@@ -31,7 +37,10 @@ def encode(value) -> str:
 
 
 class Store:
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path, run_service: RunService | None = None):
+        self.run_service = run_service
+        self._service_lock = threading.Lock()
+        self._owns_service = run_service is None
         self.directory = directory.resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
         self.objects = self.directory / "objects"
@@ -60,8 +69,10 @@ class Store:
                 );
                 CREATE INDEX IF NOT EXISTS runs_by_email ON runs(email_id, started_at);
             """)
-            # Workers time out at 30s. Expired leases are visible failures, never auto-retried.
-            cutoff = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
+            if "audit_run_id" not in {row[1] for row in db.execute("PRAGMA table_info(runs)")}:
+                db.execute("ALTER TABLE runs ADD COLUMN audit_run_id TEXT")
+            # Leave time for the shared 60s run deadline and final persistence.
+            cutoff = (datetime.now(UTC) - timedelta(seconds=120)).isoformat()
             db.execute(
                 "UPDATE runs SET status='FAILED', finished_at=?, error=? "
                 "WHERE status='RUNNING' AND started_at<?",
@@ -230,7 +241,7 @@ class Store:
         return changed
 
     def _recover_expired(self, db):
-        cutoff = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
+        cutoff = (datetime.now(UTC) - timedelta(seconds=120)).isoformat()
         db.execute(
             "UPDATE runs SET status='FAILED', finished_at=?, error=? "
             "WHERE status='RUNNING' AND started_at<?",
@@ -282,7 +293,49 @@ class Store:
             )
         return path
 
-    def analyze(self, email_id: str, expected_revision: int, mode: str = "interactive") -> dict:
+    def extraction_service(self):
+        with self._service_lock:
+            if self.run_service is None:
+                settings = Settings(
+                    local_data_dir=self.directory,
+                    dev_audit_db=self.directory / "extraction-audit.sqlite3",
+                    _env_file=None,
+                )
+                audit = AuditStore(settings.dev_audit_db)
+                audit.initialize()
+                self.run_service = RunService(audit, settings)
+            return self.run_service
+
+    def close(self):
+        if self._owns_service and self.run_service:
+            self.run_service.shutdown()
+
+    def recover_audit_runs(self):
+        """Called on application startup after audit interruption recovery."""
+        with self.connect() as db:
+            db.execute(
+                "UPDATE runs SET status='FAILED',finished_at=?,error=? WHERE status='RUNNING'",
+                (
+                    now(),
+                    encode(
+                        {
+                            "code": "interrupted",
+                            "message": "Analysis was interrupted. Run it again.",
+                        }
+                    ),
+                ),
+            )
+
+    def analyze(
+        self,
+        email_id: str,
+        expected_revision: int,
+        mode: str = "interactive",
+        *,
+        request_id=None,
+        wait=True,
+    ) -> dict:
+        service = self.extraction_service()
         run_id = str(uuid4())
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -307,56 +360,45 @@ class Store:
                 ),
             )
             db.execute("UPDATE emails SET latest_run_id=? WHERE id=?", (run_id, email_id))
-        result, error = None, None
-        clock_started = perf_counter()
+
+        def read(document):
+            try:
+                return self.document_path(document).read_bytes()
+            except StoreError as exc:
+                raise DatasetError(exc.code, str(exc), exc.status) from exc
+
+        inputs = [
+            DocumentInput(doc["filename"], lambda doc=doc: read(doc), document_id=doc["id"])
+            for doc in docs
+        ]
+        snapshot = {
+            "email_id": email_id,
+            "subject": email["subject"],
+            "from": email["sender"],
+            "body": email["body"],
+            "attachments": [doc["filename"] for doc in docs],
+        }
         try:
-            payload = {
-                "email": email,
-                "documents": [{**doc, "path": str(self.document_path(doc))} for doc in docs],
-            }
-            if docs:
-                process = subprocess.run(
-                    [sys.executable, "-m", "app.worker"],
-                    input=encode(payload),
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    check=True,
-                    cwd=Path(__file__).resolve().parents[1],
-                )
-                result = json.loads(process.stdout)
-            else:
-                result = analyze(email, [])
-        except subprocess.TimeoutExpired:
-            error = {"code": "analysis_timeout", "message": "Analysis timed out. Retry this email."}
-        except StoreError as exc:
-            error = {"code": exc.code, "message": str(exc)}
-        except Exception:
-            error = {"code": "analysis_failed", "message": "Analysis failed. Retry this email."}
-        if result:
-            result["timings_ms"] = {"total": round((perf_counter() - clock_started) * 1000, 2)}
-        with self.connect() as db:
-            db.execute("BEGIN IMMEDIATE")
-            current = self._email(db, email_id)
-            active = self._run(db, run_id)
-            if (
-                current["revision"] != expected_revision
-                or current["latest_run_id"] != run_id
-                or active["status"] != "RUNNING"
-            ):
-                error = {"code": "stale_run", "message": "This result is no longer current."}
-            db.execute(
-                "UPDATE runs SET status=?,finished_at=?,result=?,error=? WHERE id=?",
-                (
-                    "FAILED" if error else "SUCCEEDED",
-                    now(),
-                    encode(result) if result else None,
-                    encode(error) if error else None,
-                    run_id,
-                ),
+            service.run(
+                inputs,
+                "mailbox_email",
+                email["subject"],
+                snapshot,
+                request_id or f"local-{uuid4()}",
+                wait,
+                workflow=MailboxWorkflow(self, email, run_id, mode),
+                run_id=run_id,
             )
-            if not error:
-                db.execute("UPDATE emails SET current_run_id=? WHERE id=?", (run_id, email_id))
+        except (DatasetError, sqlite3.Error) as exc:
+            code = getattr(exc, "code", "AUDIT_SAVE_FAILED")
+            message = getattr(exc, "message", "Audit recording failed; analysis stopped.")
+            with self.connect() as db:
+                db.execute(
+                    "UPDATE runs SET status='FAILED',finished_at=?,error=? "
+                    "WHERE id=? AND status='RUNNING'",
+                    (now(), encode({"code": code, "message": message}), run_id),
+                )
+            raise StoreError(code, message, getattr(exc, "status", 503)) from exc
         return self.detail(email_id)
 
     def _summary(self, db, email):
@@ -439,7 +481,8 @@ class Store:
                 for doc in docs
             ]
             runs = db.execute(
-                "SELECT id,revision,pipeline_version,mode,status,started_at,finished_at "
+                "SELECT id,revision,pipeline_version,mode,status,started_at,finished_at,"
+                "audit_run_id "
                 "FROM runs WHERE email_id=? ORDER BY started_at DESC",
                 (email_id,),
             )

@@ -4,7 +4,7 @@ from app.config import Settings
 from app.main import create_app
 
 
-def test_health_without_cloud_configuration(monkeypatch):
+def test_health_without_cloud_configuration(monkeypatch, tmp_path):
     for name in (
         "SUPABASE_URL",
         "SUPABASE_SECRET_KEY",
@@ -14,7 +14,9 @@ def test_health_without_cloud_configuration(monkeypatch):
         "DEMO_SESSION_SECRET",
     ):
         monkeypatch.delenv(name, raising=False)
-    settings = Settings(_env_file=None)
+    settings = Settings(
+        _env_file=None, local_data_dir=tmp_path / "mailbox", dev_audit_db=tmp_path / "audit.sqlite3"
+    )
     assert settings.supabase_secret_key is None
     assert settings.gemini_api_key is None
     with TestClient(create_app(settings)) as client:
@@ -30,8 +32,13 @@ def test_health_without_cloud_configuration(monkeypatch):
     }
 
 
-def test_cors_allows_only_configured_origin():
-    settings = Settings(_env_file=None, allowed_origins=["https://frontend.example.com"])
+def test_cors_allows_only_configured_origin(tmp_path):
+    settings = Settings(
+        _env_file=None,
+        local_data_dir=tmp_path / "mailbox",
+        dev_audit_db=tmp_path / "audit.sqlite3",
+        allowed_origins=["https://frontend.example.com"],
+    )
     with TestClient(create_app(settings)) as client:
         allowed = client.get("/api/health", headers={"Origin": "https://frontend.example.com"})
         denied = client.get("/api/health", headers={"Origin": "https://other.example.com"})

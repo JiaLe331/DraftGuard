@@ -6,6 +6,9 @@ import { lazy, Suspense } from 'react'
 const Workspace = lazy(() =>
   import('./pages/Workspace').then((module) => ({ default: module.Workspace })),
 )
+const Extraction = lazy(() =>
+  import('./pages/Extraction').then((module) => ({ default: module.Extraction })),
+)
 
 const router = createBrowserRouter([
   {
@@ -23,6 +26,20 @@ const router = createBrowserRouter([
       { path: '/', element: <Navigate to="/overview" replace /> },
       { path: '/overview', element: <Overview /> },
       { path: '/inbox', element: <Overview inbox /> },
+      ...['/extraction', '/extraction/runs/:runId'].map((path) => ({
+        path,
+        element: (
+          <Suspense
+            fallback={
+              <div className="page" role="status">
+                Opening extraction…
+              </div>
+            }
+          >
+            <Extraction />
+          </Suspense>
+        ),
+      })),
       {
         path: '/tasks/:taskId',
         element: (

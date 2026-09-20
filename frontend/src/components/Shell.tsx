@@ -9,22 +9,36 @@ import {
   ArrowUpRightIcon,
   ShieldCheckIcon,
   XIcon,
+  FileSearchIcon,
 } from '@phosphor-icons/react'
 import { useDemo } from '../demo/context'
 import { workflow } from '../demo/model'
 import { Dialog } from './Primitives'
+import { requestJson, type Health } from '../extraction/api'
 const scrollPositions = new Map<string, number>()
 export function Shell() {
   const { tasks, warning, reset } = useDemo()
   const [resetOpen, setResetOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [error, setError] = useState('')
+  const [extractionEnabled, setExtractionEnabled] = useState(false)
   const location = useLocation(),
     navigate = useNavigate()
   const [params] = useSearchParams()
   const main = useRef<HTMLElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const routeKey = location.pathname + location.search
+  const isExtraction = location.pathname.startsWith('/extraction')
+  useEffect(() => {
+    const controller = new AbortController()
+    requestJson<Health>('/api/health', { signal: controller.signal })
+      .then((health) => {
+        if (!controller.signal.aborted)
+          setExtractionEnabled(!!health.capabilities?.development_extraction)
+      })
+      .catch(() => {})
+    return () => controller.abort()
+  }, [])
   const previousPath = useRef('')
   useEffect(() => {
     const element = main.current
@@ -43,7 +57,7 @@ export function Shell() {
     navigate(`${location.pathname === '/inbox' ? '/inbox' : '/overview'}?${next}`)
   }
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${isExtraction ? 'local-extraction-shell' : ''}`}>
       <a className="skip-link" href="#main-content">
         Skip to main content
       </a>
@@ -66,21 +80,23 @@ export function Shell() {
             </span>
           </Link>
         </div>
-        <form className="global-search" role="search" onSubmit={search}>
-          <MagnifyingGlassIcon size={21} aria-hidden="true" />
-          <input
-            key={params.get('q') ?? ''}
-            ref={searchRef}
-            aria-label="Search emails and tasks"
-            placeholder="Search emails, shipments, or senders"
-            defaultValue={params.get('q') ?? ''}
-          />
-          <kbd aria-hidden="true">↵</kbd>
-        </form>
+        {!isExtraction && (
+          <form className="global-search" role="search" onSubmit={search}>
+            <MagnifyingGlassIcon size={21} aria-hidden="true" />
+            <input
+              key={params.get('q') ?? ''}
+              ref={searchRef}
+              aria-label="Search emails and tasks"
+              placeholder="Search emails, shipments, or senders"
+              defaultValue={params.get('q') ?? ''}
+            />
+            <kbd aria-hidden="true">↵</kbd>
+          </form>
+        )}
         <div className="header-end">
           <span className="sample-label">
             <span />
-            Sample data
+            {isExtraction ? 'Local extraction' : 'Sample data'}
           </span>
           <div className="reviewer-avatar" title="Demo reviewer — unverified">
             D
@@ -118,6 +134,12 @@ export function Shell() {
             <span>Inbox</span>
             <span className="nav-count muted">{tasks.length}</span>
           </NavLink>
+          {extractionEnabled && (
+            <NavLink to="/extraction" onClick={() => setMenuOpen(false)}>
+              <FileSearchIcon size={21} />
+              <span>Extraction</span>
+            </NavLink>
+          )}
         </nav>
         <div className="sidebar-note">
           <span className="sidebar-note-icon">
@@ -135,23 +157,35 @@ export function Shell() {
         <div className="sidebar-bottom">
           <p>
             <span className="local-dot" />
-            Interactive prototype
+            {isExtraction ? 'Local extraction' : 'Interactive prototype'}
           </p>
           <small>
-            Team-authored samples.
-            <br />
-            Changes stay in this browser.
+            {isExtraction ? (
+              <>
+                Real documents.
+                <br />
+                History saved on the backend.
+              </>
+            ) : (
+              <>
+                Team-authored samples.
+                <br />
+                Changes stay in this browser.
+              </>
+            )}
           </small>
-          <button
-            className="reset-button"
-            onClick={() => {
-              setResetOpen(true)
-              setError('')
-            }}
-          >
-            <ArrowCounterClockwiseIcon size={17} />
-            Reset demo
-          </button>
+          {!isExtraction && (
+            <button
+              className="reset-button"
+              onClick={() => {
+                setResetOpen(true)
+                setError('')
+              }}
+            >
+              <ArrowCounterClockwiseIcon size={17} />
+              Reset demo
+            </button>
+          )}
         </div>
       </aside>
       <main
@@ -162,7 +196,7 @@ export function Shell() {
         className="main-content"
         onScroll={(event) => scrollPositions.set(routeKey, event.currentTarget.scrollTop)}
       >
-        {warning && (
+        {warning && !isExtraction && (
           <div className="notice warning" role="alert">
             {warning}
           </div>

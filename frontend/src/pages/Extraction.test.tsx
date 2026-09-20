@@ -154,7 +154,7 @@ describe('local extraction journeys', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Extract attachments' }))
     const tabs = await screen.findByRole('navigation', { name: 'Attachments' })
     expect(within(tabs).getAllByRole('button')).toHaveLength(2)
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/dev/emails/email_004/extract', {
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/dev/emails/email_004/extract?wait=false', {
       method: 'POST',
     })
   })
@@ -162,7 +162,7 @@ describe('local extraction journeys', () => {
   it('sends the file and expected role as multipart data and blocks duplicate submission', async () => {
     let finish!: (value: Response) => void
     const { fetchMock } = setup('/extraction', (path) =>
-      path === '/api/v1/dev/extract'
+      path === '/api/v1/dev/extract?wait=false'
         ? new Promise((resolve) => {
             finish = resolve
           })
@@ -174,7 +174,9 @@ describe('local extraction journeys', () => {
     await userEvent.selectOptions(screen.getByLabelText('Expected document role'), 'SI')
     await userEvent.dblClick(screen.getByRole('button', { name: 'Extract document' }))
     expect(screen.getByRole('button', { name: 'Extracting document…' })).toBeDisabled()
-    const uploads = fetchMock.mock.calls.filter(([path]) => path === '/api/v1/dev/extract')
+    const uploads = fetchMock.mock.calls.filter(
+      ([path]) => path === '/api/v1/dev/extract?wait=false',
+    )
     expect(uploads).toHaveLength(1)
     expect((uploads[0][1]?.body as FormData).get('file')).toBe(file)
     expect((uploads[0][1]?.body as FormData).get('expected_role')).toBe('SI')
@@ -211,7 +213,7 @@ describe('local extraction journeys', () => {
 
   it('shows a failed save and restores the submit button', async () => {
     setup('/extraction', (path) =>
-      path === '/api/v1/dev/emails/email_004/extract'
+      path === '/api/v1/dev/emails/email_004/extract?wait=false'
         ? Promise.resolve(
             response(
               {

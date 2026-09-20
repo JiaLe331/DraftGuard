@@ -24,6 +24,7 @@ import { RunInspector } from '../extraction/RunInspector'
 import { RunStatus } from '../extraction/ExtractionStatus'
 import { pageOffset, runPath, useExtractionParams } from '../extraction/navigation'
 import '../extraction/extraction.css'
+import '../extraction/audit.css'
 
 export function Extraction() {
   const { runId } = useParams()
@@ -245,7 +246,7 @@ function EmailDetail({ emailId, onBusy }: { emailId: string; onBusy: (value: boo
     setError('')
     try {
       const run = await requestJson<ExtractionRun>(
-        `/api/v1/dev/emails/${encodeURIComponent(emailId)}/extract`,
+        `/api/v1/dev/emails/${encodeURIComponent(emailId)}/extract?wait=false`,
         {
           method: 'POST',
         },
@@ -287,9 +288,7 @@ function EmailDetail({ emailId, onBusy }: { emailId: string; onBusy: (value: boo
             : 'Record no attachments'}
         <ArrowRightIcon size={18} />
       </button>
-      {busy && (
-        <p role="status">Reading each attachment and saving its audit. Keep this page open.</p>
-      )}
+      {busy && <p role="status">Creating a saved extraction run…</p>}
       {error && (
         <p className="form-error" role="alert">
           {error}
@@ -322,7 +321,7 @@ function UploadDocument({ limit, onBusy }: { limit: number; onBusy: (value: bool
     form.append('file', file)
     if (role) form.append('expected_role', role)
     try {
-      const run = await requestJson<ExtractionRun>('/api/v1/dev/extract', {
+      const run = await requestJson<ExtractionRun>('/api/v1/dev/extract?wait=false', {
         method: 'POST',
         body: form,
       })
@@ -367,7 +366,7 @@ function UploadDocument({ limit, onBusy }: { limit: number; onBusy: (value: bool
           <FileArrowUpIcon size={18} aria-hidden="true" />
           {busy ? 'Extracting document…' : 'Extract document'}
         </button>
-        {busy && <p role="status">Reading the file and saving its audit…</p>}
+        {busy && <p role="status">Saving the file and starting extraction…</p>}
         {error && (
           <p className="form-error" role="alert">
             {error}
@@ -409,20 +408,25 @@ function RunHistory() {
         </div>
       )}
       {history.data?.items.map((run) => (
-        <Link
-          className="extraction-history-row"
-          key={run.run_id}
-          to={runPath(run.run_id, location.search)}
-        >
-          <div>
-            <strong>{run.source_label}</strong>
-            <small>
-              {new Date(run.created_at).toLocaleString()} · {run.document_count} documents
-            </small>
-          </div>
-          <RunStatus run={run} />
-          <ArrowRightIcon size={18} />
-        </Link>
+        <div className="audit-history-entry" key={run.run_id}>
+          <Link
+            className="extraction-history-row"
+            key={run.run_id}
+            to={runPath(run.run_id, location.search)}
+          >
+            <div>
+              <strong>{run.source_label}</strong>
+              <small>
+                {new Date(run.created_at).toLocaleString()} · {run.document_count} documents
+              </small>
+            </div>
+            <RunStatus run={run} />
+            <ArrowRightIcon size={18} />
+          </Link>
+          <Link className="button" to={`/audit/runs/${run.run_id}`}>
+            View audit
+          </Link>
+        </div>
       ))}
       <div className="extraction-pagination">
         <button

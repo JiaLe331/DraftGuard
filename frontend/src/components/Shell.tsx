@@ -9,6 +9,7 @@ import {
   ShieldCheckIcon,
   XIcon,
   FileSearchIcon,
+  ListMagnifyingGlassIcon,
 } from '@phosphor-icons/react'
 import { useMailbox } from '../mailbox/context'
 import { requestJson, type Health } from '../extraction/api'
@@ -23,7 +24,8 @@ export function Shell() {
   const main = useRef<HTMLElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const routeKey = location.pathname + location.search
-  const isExtraction = location.pathname.startsWith('/extraction')
+  const isExtraction =
+    location.pathname.startsWith('/extraction') || location.pathname.startsWith('/audit')
   useEffect(() => {
     const controller = new AbortController()
     requestJson<Health>('/api/health', { signal: controller.signal })
@@ -134,6 +136,12 @@ export function Shell() {
             <span>Inbox</span>
             <span className="nav-count muted">{summary?.total ?? '—'}</span>
           </NavLink>
+          {extractionEnabled && (
+            <NavLink to="/audit" onClick={() => setMenuOpen(false)}>
+              <ListMagnifyingGlassIcon size={21} />
+              <span>Audit Trail</span>
+            </NavLink>
+          )}
           {extractionEnabled && (
             <NavLink to="/extraction" onClick={() => setMenuOpen(false)}>
               <FileSearchIcon size={21} />

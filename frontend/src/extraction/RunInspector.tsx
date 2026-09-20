@@ -5,12 +5,9 @@ import {
   DownloadSimpleIcon,
   FileTextIcon,
   ArrowSquareOutIcon,
-  CheckCircleIcon,
-  ClockIcon,
-  WarningCircleIcon,
 } from '@phosphor-icons/react'
 import { apiUrl, locationLabel, type ExtractedDocument, type ExtractionRun } from './api'
-import { useResource } from './useResource'
+import { usePollingResource } from './usePollingResource'
 import { ExtractionStatus, RunStatus } from './ExtractionStatus'
 import { returnPath, useExtractionParams } from './navigation'
 
@@ -32,7 +29,11 @@ const states = {
 
 export function RunInspector({ runId }: { runId: string }) {
   const { params } = useExtractionParams()
-  const resource = useResource<ExtractionRun>(`/api/v1/dev/runs/${encodeURIComponent(runId)}`)
+  const resource = usePollingResource<ExtractionRun>(
+    `/api/v1/dev/runs/${encodeURIComponent(runId)}`,
+    1000,
+    true,
+  )
   return (
     <>
       <Link className="extraction-back" to={returnPath(params.get('from'))}>
@@ -81,6 +82,12 @@ function RunDetails({ run, refresh }: { run: ExtractionRun; refresh: () => void 
           source review; this is not shipment approval.
         </p>
         <div className="extraction-actions">
+          <Link
+            className="button primary"
+            to={`/audit/runs/${run.run_id}${document ? `?document=${document.document_id}` : ''}`}
+          >
+            {run.processing_status === 'RUNNING' ? 'View live audit' : 'View audit trail'}
+          </Link>
           <a className="button" href={apiUrl(`/api/v1/dev/runs/${run.run_id}?download=true`)}>
             <DownloadSimpleIcon size={18} /> Download audit JSON
           </a>
@@ -90,6 +97,11 @@ function RunDetails({ run, refresh }: { run: ExtractionRun; refresh: () => void 
             </button>
           )}
         </div>
+        {run.processing_status === 'RUNNING' && (
+          <p role="status">
+            Processing on the backend. Results update automatically; you can leave this page.
+          </p>
+        )}
         {run.issues.map((issue, i) => (
           <p key={`${issue.code}-${i}`} className="notice warning">
             {issue.message}
@@ -340,56 +352,6 @@ function DocumentInspector({ document, runId }: { document: ExtractedDocument; r
           </section>
         </div>
       )}
-      <section className="panel extraction-panel extraction-audit">
-        <h3>Processing audit</h3>
-        <p className="extraction-muted">
-          Recorded during this extraction. Expand a step to inspect its candidates and decisions.
-        </p>
-        <ol>
-          {document.events.map((event) => (
-            <li key={event.sequence}>
-              <details>
-                <summary>
-                  <span
-                    className={`extraction-audit-icon ${event.status === 'FAILED' || event.status === 'NEEDS_REVIEW' ? 'warning' : event.status === 'STARTED' ? 'blue' : 'success'}`}
-                  >
-                    {event.status === 'FAILED' || event.status === 'NEEDS_REVIEW' ? (
-                      <WarningCircleIcon size={20} aria-hidden="true" />
-                    ) : event.status === 'STARTED' ? (
-                      <ClockIcon size={20} aria-hidden="true" />
-                    ) : (
-                      <CheckCircleIcon size={20} aria-hidden="true" />
-                    )}
-                  </span>
-                  <span>
-                    <strong>{event.message}</strong>
-                    <small>
-                      {event.stage.replaceAll('_', ' ')} ·{' '}
-                      {event.status.replaceAll('_', ' ').toLowerCase()}
-                    </small>
-                  </span>
-                  <time title={new Date(event.timestamp).toLocaleString()}>
-                    {event.elapsed_ms.toFixed(1)} ms
-                  </time>
-                </summary>
-                <pre>{JSON.stringify(event.details, null, 2)}</pre>
-              </details>
-            </li>
-          ))}
-        </ol>
-        {document.events.length === 0 && (
-          <p>No processing steps were recorded before this run stopped.</p>
-        )}
-        <details className="extraction-details">
-          <summary>Document identity</summary>
-          <dl>
-            <dt>Document ID</dt>
-            <dd>{document.document_id}</dd>
-            <dt>SHA-256</dt>
-            <dd>{document.content_sha256 ?? 'Original not available'}</dd>
-          </dl>
-        </details>
-      </section>
     </>
   )
 }

@@ -40,15 +40,28 @@ export type ExtractionResult = {
   needs_review: boolean
 }
 export type AuditEvent = {
+  event_id?: string
+  run_id?: string
+  request_id?: string
+  document_id?: string | null
+  duration_ms?: number | null
   sequence: number
   timestamp: string
-  elapsed_ms: number
+  elapsed_ms?: number
   stage: string
   status: string
   message: string
   details: Record<string, unknown>
 }
+export type AuditEventPage = {
+  items: AuditEvent[]
+  has_more: boolean
+  next_after_sequence: number
+  processing_status: string
+  trace_mode: 'live' | 'legacy'
+}
 export type ExtractedDocument = {
+  source_units?: SourceUnit[]
   document_id: string
   filename: string
   content_sha256: string | null
@@ -70,6 +83,7 @@ export type DatasetEmail = Omit<EmailSummary, 'attachment_count'> & {
   attachments: string[]
 }
 export type RunSummary = {
+  trace_mode?: 'live' | 'legacy'
   run_id: string
   source_type: string
   source_label: string
@@ -80,6 +94,8 @@ export type RunSummary = {
   document_count: number
 }
 export type ExtractionRun = RunSummary & {
+  audit_version?: number
+  events?: AuditEvent[]
   request_id: string
   pipeline_version: string
   email: DatasetEmail | null

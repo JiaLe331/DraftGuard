@@ -9,6 +9,7 @@ const Workspace = lazy(() =>
 const Extraction = lazy(() =>
   import('./pages/Extraction').then((module) => ({ default: module.Extraction })),
 )
+const Audit = lazy(() => import('./pages/Audit').then((module) => ({ default: module.Audit })))
 
 const router = createBrowserRouter([
   {
@@ -26,6 +27,20 @@ const router = createBrowserRouter([
       { path: '/', element: <Navigate to="/overview" replace /> },
       { path: '/overview', element: <Overview /> },
       { path: '/inbox', element: <Overview inbox /> },
+      ...['/audit', '/audit/runs/:runId'].map((path) => ({
+        path,
+        element: (
+          <Suspense
+            fallback={
+              <div className="page" role="status">
+                Opening audit trail…
+              </div>
+            }
+          >
+            <Audit />
+          </Suspense>
+        ),
+      })),
       ...['/extraction', '/extraction/runs/:runId'].map((path) => ({
         path,
         element: (

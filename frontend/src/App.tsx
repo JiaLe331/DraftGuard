@@ -1,77 +1,61 @@
-import { useEffect, useState } from 'react'
+import { Navigate, createBrowserRouter, RouterProvider } from 'react-router'
+import { DemoProvider } from './demo/store'
+import { Shell } from './components/Shell'
+import { Overview } from './pages/Overview'
+import { lazy, Suspense } from 'react'
+const Workspace = lazy(() =>
+  import('./pages/Workspace').then((module) => ({ default: module.Workspace })),
+)
 
-type ConnectionStatus = 'loading' | 'connected' | 'unavailable'
-
-const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '')
-const messages: Record<ConnectionStatus, string> = {
-  loading: 'Checking the backend connection...',
-  connected: 'The DraftGuard API is reachable.',
-  unavailable: 'The backend could not be reached. Start the API and try again.',
-}
-
+const router = createBrowserRouter([
+  {
+    element: <Shell />,
+    errorElement: (
+      <div className="page">
+        <h1>The workspace could not be opened.</h1>
+        <p>Your saved local data has not been cleared.</p>
+        <a className="button primary" href="/overview">
+          Reload workspace
+        </a>
+      </div>
+    ),
+    children: [
+      { path: '/', element: <Navigate to="/overview" replace /> },
+      { path: '/overview', element: <Overview /> },
+      { path: '/inbox', element: <Overview inbox /> },
+      {
+        path: '/tasks/:taskId',
+        element: (
+          <Suspense
+            fallback={
+              <div className="page" role="status">
+                Opening workspace…
+              </div>
+            }
+          >
+            <Workspace />
+          </Suspense>
+        ),
+      },
+      {
+        path: '*',
+        element: (
+          <div className="page">
+            <h1>Page not found</h1>
+            <a className="button" href="/overview">
+              Return to overview
+            </a>
+          </div>
+        ),
+      },
+    ],
+  },
+])
 function App() {
-  const [status, setStatus] = useState<ConnectionStatus>('loading')
-  const [attempt, setAttempt] = useState(0)
-
-  useEffect(() => {
-    const controller = new AbortController()
-    const timeout = window.setTimeout(() => controller.abort(), 5000)
-    let active = true
-
-    async function checkHealth() {
-      try {
-        const response = await fetch(`${apiBaseUrl}/api/health`, {
-          signal: controller.signal,
-          cache: 'no-store',
-        })
-        if (!response.ok) throw new Error('Health check failed')
-        const data: unknown = await response.json()
-        if (
-          typeof data !== 'object' || data === null ||
-          !('status' in data) || data.status !== 'ok' ||
-          !('service' in data) || data.service !== 'draftguard-api'
-        ) {
-          throw new Error('Unexpected health response')
-        }
-        if (active) setStatus('connected')
-      } catch {
-        if (active) setStatus('unavailable')
-      } finally {
-        window.clearTimeout(timeout)
-      }
-    }
-
-    void checkHealth()
-    return () => {
-      active = false
-      window.clearTimeout(timeout)
-      controller.abort()
-    }
-  }, [attempt])
-
   return (
-    <main>
-      <h1>DraftGuard</h1>
-      <p>Development scaffold</p>
-      <section aria-labelledby="connection-heading">
-        <h2 id="connection-heading">Backend connection</h2>
-        <div role="status" aria-live="polite">
-          <strong>{status.charAt(0).toUpperCase() + status.slice(1)}</strong>
-          <p>{messages[status]}</p>
-        </div>
-        <button
-          disabled={status === 'loading'}
-          onClick={() => {
-            setStatus('loading')
-            setAttempt((current) => current + 1)
-          }}
-        >
-          {status === 'loading' ? 'Checking...' : 'Retry connection'}
-        </button>
-      </section>
-      <p className="note">This checks API availability only. Document processing and cloud integrations are not connected yet.</p>
-    </main>
+    <DemoProvider>
+      <RouterProvider router={router} />
+    </DemoProvider>
   )
 }
-
 export default App

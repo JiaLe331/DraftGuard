@@ -1,15 +1,16 @@
 # DraftGuard
 
-DraftGuard is an AI-assisted shipping document verification workspace. This initial scaffold provides a runnable frontend and backend; document processing is not implemented yet.
+DraftGuard is an AI-assisted shipping document verification workspace. The repository contains an interactive UI prototype and a FastAPI scaffold. The UI uses team-authored sample data; real document ingestion, extraction, and cloud services are not connected yet.
 
 ## Requirements
 
-- Node.js 24 and pnpm 11.25.0
-- uv 0.12.16 and Python 3.12 (managed by uv)
+- Node.js 24 (also recorded in `.node-version`)
+- pnpm 11.25.0
+- uv 0.12.16; uv manages Python 3.12 for the backend
 
 ## Setup
 
-From the repository root:
+Run from the repository root:
 
 ```sh
 cd frontend
@@ -21,47 +22,67 @@ uv sync --frozen
 cp .env.example .env
 ```
 
-Environment files are optional for this scaffold. Cloud credentials are not required.
+Environment files are optional for the scaffold: the defaults work without cloud credentials. Keep real secrets in local environment files or platform secret settings.
 
-## Development
+## Start development
 
-Start the backend in one terminal, from the repository root:
+In terminal 1, from the repository root:
 
 ```sh
 cd backend
 uv run --frozen uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Start the frontend in a second terminal:
+In terminal 2, from the repository root:
 
 ```sh
 cd frontend
 pnpm dev
 ```
 
-Open <http://localhost:5173>. The placeholder page checks the backend and displays loading, connected, or unavailable. Stop the backend and retry to test failure, then restart and retry to test recovery.
+Open <http://localhost:5173>. The frontend works independently of the backend for this prototype. It opens the Overview work queue, with an auxiliary Inbox and a dedicated verification workspace. No cloud credentials are needed.
 
-The API exposes `GET /api/health` with `{"status":"ok","service":"draftguard-api"}` and interactive documentation at `/docs`. Health indicates process liveness, not provider readiness.
+Try these sample workflows:
 
-If ports are occupied, start the backend on 8001 and use `API_PROXY_TARGET=http://127.0.0.1:8001 pnpm dev --port 5174` for the frontend.
+- **DG-004:** Inspect two discrepancies, then load sample BL v2 (two resolved, one new weight error) and v3. Complete the current review; older revisions stay read-only.
+- **DG-160:** Correct the misread BL gross weight from `88,570 KG` to the actual sample source value `88,750 KG`, enter a source reference, and save.
+- **DG-512:** Confirm the illustrative AI candidate against the sample text, then complete the review. This is not a real PDF or AI call.
+- **DG-516:** Supply missing information with provenance. It stays unresolved because external evidence cannot be verified in this prototype.
+
+Edits create local working copies saved in this browser. Refresh preserves them; **Reset demo** restores the baseline. Original machine results remain intact. Search and filters live in the URL; return navigation restores the queue state. Use **Print report** in a task to print or save the sample report as PDF.
+
+If the default ports are occupied, leave the other application running. Start this backend with `--port 8001` and run the frontend with `API_PROXY_TARGET=http://127.0.0.1:8001 pnpm dev --port 5174`. Open <http://localhost:5174> in that case. `API_PROXY_TARGET` is a development-server environment override, not a browser variable.
+
+The backend serves:
+
+- `GET /api/health`: `{"status":"ok","service":"draftguard-api"}`
+- `/docs`: interactive API documentation
+
+Health reports process liveness only. It does not verify Supabase, Gemini, or document-processing readiness.
 
 ## Configuration
 
-Vite proxies `/api` to the local backend during development. For a separately hosted API, set `VITE_API_BASE_URL` to its origin, without `/api`, and configure the backend's `ALLOWED_ORIGINS` JSON array. Vite variables are public; never put secrets in them.
+The Vite development server proxies `/api` to `http://127.0.0.1:8000`. Leave `VITE_API_BASE_URL` empty to use this proxy. For a separately hosted API, set it to the backend origin (for example, `https://api.example.com`), without `/api`. Restart Vite after changing environment files. Vite public variables are bundled into the frontend; never store secrets in them.
 
-Backend configuration reads `backend/.env`. Supabase, Gemini, and demo-session settings are reserved for future integrations and may remain empty. Production hosting must provide an API origin or its own proxy.
+The backend loads `backend/.env`, with process environment variables taking precedence. `APP_ENV` defaults to `development`. `ALLOWED_ORIGINS` is a JSON array, defaulting to localhost and 127.0.0.1 on port 5173; configure the frontend origin when hosting separately. CORS currently permits GET requests for the health endpoint.
+
+`SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `SUPABASE_STORAGE_BUCKET`, `GEMINI_API_KEY`, `GEMINI_MODEL`, and `DEMO_SESSION_SECRET` are reserved server-side settings. They are optional and unused in this scaffold. No provider clients are initialized.
+
+The Vite proxy is development-only. A production frontend will require a separately hosted backend with the appropriate base URL and CORS configuration, or a host-level `/api` proxy. Deployment is a later milestone.
 
 ## Checks
 
-From `frontend/`:
+Frontend, from `frontend/`:
 
 ```sh
 pnpm lint
 pnpm typecheck
+pnpm test
+pnpm format:check
 pnpm build
 ```
 
-From `backend/`:
+Backend, from `backend/`:
 
 ```sh
 uv run --frozen ruff check .
@@ -69,10 +90,20 @@ uv run --frozen ruff format --check .
 uv run --frozen pytest
 ```
 
-GitHub Actions runs these checks using frozen lockfiles without cloud credentials.
+GitHub Actions runs these checks with frozen lockfiles and no cloud credentials. Frontend tests cover review safety, version transitions, persistence, and user journeys. Backend tests cover the health response without provider configuration and allowed-origin behavior. The frontend production build is written to `frontend/dist/`.
 
-## Scope
+## Repository layout
 
-`frontend/` contains React, TypeScript, and Vite. `backend/app/` separates settings, HTTP routes, and the application entrypoint. See [the PRD](docs/PRD.md) for product requirements.
+- `frontend/`: React, TypeScript, Vite, and ESLint
+- `backend/app/`: FastAPI entrypoint, environment configuration, and HTTP routes
+- `backend/tests/`: backend smoke tests
+- `docs/`: existing product requirements and historical scope confirmation
+- `.github/workflows/`: continuous integration
 
-UI design, upload, parsing, comparison, AI processing, persistence, and deployment are subsequent milestones. The PRD's real-data deployment gate is not complete. New code, comments, and documentation use English.
+## Current scope
+
+Implemented: Overview, Inbox, seven-field workspace, sample evidence, local review editing, scan-candidate confirmation, revision demonstrations, completion checks, printable reports, environment templates, dependency locks, and CI checks.
+
+Not implemented: actual email connection, file upload, parsing, AI extraction, external evidence verification, private cloud storage, or deployment. The PRD's real-data deployment gate is still outstanding. UI sample labels and timestamps must not be presented as live processing results. The health API remains available separately at `/api/health`.
+
+See [the PRD](docs/PRD.md) and [the UI implementation notes](docs/UI.md). New code, comments, logs, UI copy, and documentation use English.

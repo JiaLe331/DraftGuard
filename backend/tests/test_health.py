@@ -20,7 +20,14 @@ def test_health_without_cloud_configuration(monkeypatch):
     with TestClient(create_app(settings)) as client:
         response = client.get("/api/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "service": "draftguard-api"}
+    assert response.json() == {
+        "status": "ok",
+        "service": "draftguard-api",
+        "capabilities": {
+            "development_extraction": False,
+            "upload_limit_bytes": 3 * 1024 * 1024,
+        },
+    }
 
 
 def test_cors_allows_only_configured_origin():

@@ -1,0 +1,4 @@
+# Preserve original document bytes and prevent line-ending conversion.
+*.pdf binary
+*.docx binary
+*.xlsx binary

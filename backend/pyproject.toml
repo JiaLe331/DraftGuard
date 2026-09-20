@@ -4,8 +4,14 @@ version = "0.1.0"
 description = "DraftGuard API scaffold"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "defusedxml>=0.7.1,<1",
     "fastapi>=0.115,<1",
+    "openpyxl>=3.1.5,<4",
+    "pydantic>=2,<3",
     "pydantic-settings>=2,<3",
+    "pypdf>=6.19,<7",
+    "python-docx>=1.2,<2",
+    "python-multipart>=0.0.20,<1",
     "uvicorn>=0.30,<1",
 ]
 

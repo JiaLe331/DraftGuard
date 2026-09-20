@@ -178,6 +178,98 @@ describe('dataset mailbox journeys', () => {
       await screen.findByRole('heading', { name: 'Your dataset has not been imported' }),
     ).toBeInTheDocument()
   })
+  it('shows a first analysis journey without fabricated previous results', async () => {
+    const pending: SampleDetail = {
+      ...sample(),
+      category: null,
+      workflow_state: 'NOT_ANALYZED',
+      current_run: null,
+      latest_run: null,
+      last_analyzed: null,
+      runs: [],
+    }
+    let saved = false
+    let finish!: () => void
+    const wait = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, options?: RequestInit) => {
+        if (options?.method === 'POST') {
+          await wait
+          saved = true
+          return json(sample())
+        }
+        return json(url.includes('/samples?') ? listing() : saved ? sample() : pending)
+      }),
+    )
+    renderRoute('/tasks/email_test')
+    await screen.findByRole('button', { name: 'Start analysis' })
+    expect(screen.queryByRole('table', { name: 'Seven-field comparison' })).not.toBeInTheDocument()
+    expect(screen.getByText(/Not classified yet/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Start analysis' }))
+    expect(screen.getByText('Reading email context…')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Analyzing…' })).toBeDisabled()
+    expect(screen.queryByText(/previous saved result remains/)).not.toBeInTheDocument()
+    await act(async () => {
+      finish()
+      await wait
+    })
+    expect(screen.queryByRole('button', { name: 'Show results now' })).not.toBeInTheDocument()
+    expect(
+      await screen.findByRole('table', { name: 'Seven-field comparison' }, { timeout: 4500 }),
+    ).toBeInTheDocument()
+  })
+  it('shows only real files and expands more than two attachments', async () => {
+    const pending = {
+      ...sample(),
+      current_run: null,
+      latest_run: null,
+      category: null,
+      workflow_state: 'NOT_ANALYZED',
+      documents: [0, 1, 2].map((i) => ({
+        ...sample().documents[0],
+        id: `doc-${i}`,
+        filename: `long-original-source-${i}.pdf`,
+        byte_count: 1024,
+      })),
+      attachment_count: 3,
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => json(url.includes('/samples?') ? listing() : pending)),
+    )
+    renderRoute('/tasks/email_test')
+    await screen.findByRole('button', { name: 'Start analysis' })
+    expect(screen.getAllByRole('button', { name: 'Start analysis' })).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: 'Analyze email' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /long-original-source-2/ })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Show all attachments (3)' }))
+    expect(
+      screen.getByRole('button', { name: /long-original-source-2.pdf PDF · 1.0 KB/ }),
+    ).toBeInTheDocument()
+  })
+  it('offers classification for email without invented attachments', async () => {
+    const pending = {
+      ...sample(),
+      current_run: null,
+      latest_run: null,
+      category: null,
+      workflow_state: 'NOT_ANALYZED',
+      documents: [],
+      attachment_count: 0,
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => json(url.includes('/samples?') ? listing() : pending)),
+    )
+    renderRoute('/tasks/email_test')
+    expect(
+      await screen.findByText('No attachments · Email classification only'),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Start analysis' })).toBeEnabled()
+  })
   it('opens real evidence and exposes no pretend review or completion actions', async () => {
     vi.stubGlobal('fetch', mockApi())
     renderRoute('/tasks/email_test')
@@ -185,10 +277,7 @@ describe('dataset mailbox journeys', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Inspect SI Consignee' }))
     const evidence = screen.getByRole('region', { name: 'Source evidence' })
     expect(within(evidence).getByRole('heading', { name: 'Consignee' })).toBeInTheDocument()
-    expect(within(evidence).getByRole('link', { name: 'Open original · page 1' })).toHaveAttribute(
-      'href',
-      '/api/v1/samples/email_test/documents/si/content#page=1',
-    )
+    expect(within(evidence).getByRole('button', { name: 'Open original · page 1' })).toBeEnabled()
     expect(
       screen.queryByRole('button', { name: /Complete review|Correct extraction|Save & recheck/ }),
     ).not.toBeInTheDocument()
@@ -229,7 +318,8 @@ describe('dataset mailbox journeys', () => {
       'SOURCE LTD',
     )
     await userEvent.click(screen.getByRole('button', { name: 'Reanalyze' }))
-    await screen.findByRole('button', { name: 'Reanalyze' })
+    expect(screen.queryByRole('button', { name: 'Show results now' })).not.toBeInTheDocument()
+    await screen.findByRole('button', { name: 'Reanalyze' }, { timeout: 4500 })
     expect(screen.queryByText('Latest analysis failed')).not.toBeInTheDocument()
     expect(posts).toBe(2)
   })
@@ -302,7 +392,7 @@ describe('dataset mailbox journeys', () => {
           'href',
           '/audit/runs/audit-new',
         ),
-      { timeout: 3000 },
+      { timeout: 4500 },
     )
     expect(fetcher.mock.calls.filter(([, options]) => options?.method === 'POST')).toHaveLength(1)
     await waitFor(() =>

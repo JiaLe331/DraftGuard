@@ -1,3 +1,4 @@
+import { AnalysisActivity } from '../components/AnalysisActivity'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useParams, useSearchParams } from 'react-router'
 import {
@@ -6,10 +7,10 @@ import {
   ArrowClockwiseIcon,
   FileTextIcon,
   EnvelopeSimpleIcon,
-  ArrowSquareOutIcon,
 } from '@phosphor-icons/react'
-import { documentUrl, request, useResource } from '../mailbox/api'
+import { useResource } from '../mailbox/api'
 import { useMailbox } from '../mailbox/context'
+import { useAnalysis } from '../mailbox/useAnalysis'
 import {
   analyzedAt,
   categoryLabels,
@@ -20,6 +21,7 @@ import {
 import type { Health } from '../extraction/api'
 import { EmptyState, StatusBadge } from '../components/Primitives'
 import { Report } from '../components/Report'
+import { DocumentPreview } from '../components/DocumentPreview'
 
 export function Workspace() {
   const { taskId } = useParams()
@@ -64,16 +66,27 @@ export function Workspace() {
     )
   return <TaskWorkspace key={data.id + ':' + data.latest_run?.id} task={data} reload={reload} />
 }
-function TaskWorkspace({ task, reload }: { task: SampleDetail; reload: () => void }) {
+function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: () => void }) {
   const { refresh } = useMailbox()
   const health = useResource<Health>('/api/health')
   const auditEnabled = !!health.data?.capabilities?.development_extraction
   const location = useLocation()
   const [params, setParams] = useSearchParams()
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const running = useRef(false)
+  const [preview, setPreview] = useState<{ id: string; page?: number } | null>(null)
+  const {
+    task,
+    phase,
+    savedResult,
+    error,
+    analyze: reanalyze,
+    busy,
+  } = useAnalysis(initial, refresh)
+  const [allAttachments, setAllAttachments] = useState(false)
   const evidenceRef = useRef<HTMLElement>(null)
+  const summaryRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (phase === 'revealed') summaryRef.current?.focus({ preventScroll: true })
+  }, [phase])
   const result = task.current_run?.result
   const fields = result?.fields ?? []
   const field =
@@ -93,29 +106,6 @@ function TaskWorkspace({ task, reload }: { task: SampleDetail; reload: () => voi
     : []
   const fromState = (location.state as { from?: string } | null)?.from
   const from = fromState && /^\/(overview|inbox)(\?|$)/.test(fromState) ? fromState : '/overview'
-  async function reanalyze() {
-    if (running.current) return
-    running.current = true
-    setBusy(true)
-    setError('')
-    try {
-      await request<SampleDetail>(
-        `/api/v1/dev/samples/${encodeURIComponent(task.id)}/analyze?wait=false`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ expected_revision: task.revision }),
-        },
-      )
-      reload()
-      refresh()
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      running.current = false
-      setBusy(false)
-    }
-  }
   function select(field: FieldResult, role: 'si' | 'bl') {
     const next = new URLSearchParams(params)
     next.set('field', field.key)
@@ -148,9 +138,9 @@ function TaskWorkspace({ task, reload }: { task: SampleDetail; reload: () => voi
       </div>
     )
   const comparison = task.category === 'BL_COMPARISON'
-  const processing = busy || task.latest_run?.status === 'RUNNING'
+  const processing = busy || (phase !== 'failed' && task.latest_run?.status === 'RUNNING')
   return (
-    <div className="page workspace-page">
+    <div className={`page workspace-page ${phase === 'revealed' ? 'analysis-revealed' : ''}`}>
       <div className="workspace-breadcrumb">
         <Link to={from}>
           <ArrowLeftIcon size={17} />
@@ -174,10 +164,19 @@ function TaskWorkspace({ task, reload }: { task: SampleDetail; reload: () => voi
             <PrinterIcon size={16} />
             Print report
           </button>
-          <button className="button primary compact" disabled={processing} onClick={reanalyze}>
-            <ArrowClockwiseIcon size={16} />
-            {processing ? 'Analyzing…' : task.current_run ? 'Reanalyze' : 'Analyze email'}
-          </button>
+          {result && (
+            <button className="button primary compact" disabled={processing} onClick={reanalyze}>
+              <ArrowClockwiseIcon
+                size={16}
+                className={phase === 'running' ? 'analysis-spinner' : undefined}
+              />
+              {phase === 'preparing'
+                ? 'Preparing results…'
+                : processing
+                  ? 'Analyzing…'
+                  : 'Reanalyze'}
+            </button>
+          )}
         </div>
       </div>
       <div className="workspace-heading">
@@ -186,11 +185,23 @@ function TaskWorkspace({ task, reload }: { task: SampleDetail; reload: () => voi
           <h1>{task.subject}</h1>
           <div className="workspace-byline">
             {task.sender} ·{' '}
-            {task.category ? categoryLabels[task.category] : 'Needs classification review'}
+            {task.category
+              ? categoryLabels[task.category]
+              : !task.latest_run
+                ? 'Not classified yet'
+                : 'Needs classification review'}
           </div>
         </div>
         <div className="workspace-status">
-          <StatusBadge status={processing ? 'RUNNING' : task.workflow_state} />
+          <StatusBadge
+            status={
+              phase === 'preparing'
+                ? task.workflow_state
+                : processing
+                  ? 'RUNNING'
+                  : task.workflow_state
+            }
+          />
           <small>Last analyzed: {analyzedAt(task.last_analyzed)}</small>
         </div>
       </div>
@@ -199,10 +210,82 @@ function TaskWorkspace({ task, reload }: { task: SampleDetail; reload: () => voi
           {error} Use Refresh to check whether the analysis was saved.
         </div>
       )}
-      {processing && (
-        <div className="notice" role="status">
-          Analyzing the current source files. Existing results below remain from the previous saved
-          run.
+      <section
+        className={`analysis-workbench ${phase === 'running' ? 'is-running' : phase === 'preparing' ? 'is-preparing' : ''}`}
+        aria-labelledby="analysis-title"
+      >
+        <div className="analysis-files">
+          <h2 id="analysis-title">{!result ? 'Analyze this email' : 'Source attachments'}</h2>
+          <p className="analysis-file-count">
+            {task.documents.length
+              ? `${task.documents.length} attachment${task.documents.length === 1 ? '' : 's'}`
+              : 'No attachments · Email classification only'}
+          </p>
+          <div className="analysis-file-list">
+            {(allAttachments ? task.documents : task.documents.slice(0, 2)).map((doc) => (
+              <button
+                className="analysis-file"
+                key={doc.id}
+                onClick={() => setPreview({ id: doc.id })}
+              >
+                <span className="analysis-file-icon">
+                  <FileTextIcon size={22} />
+                  <span className="file-scan" aria-hidden="true" />
+                </span>
+                <span className="analysis-file-info">
+                  <strong>{doc.filename}</strong>{' '}
+                  <small>
+                    {doc.filename.split('.').pop()?.toUpperCase()} ·{' '}
+                    {doc.byte_count < 1024
+                      ? `${doc.byte_count} B`
+                      : `${(doc.byte_count / 1024).toFixed(1)} KB`}
+                  </small>
+                </span>
+              </button>
+            ))}
+            {!task.documents.length && <EnvelopeSimpleIcon size={26} aria-hidden="true" />}
+          </div>
+          {task.documents.length > 2 && (
+            <button className="button compact" onClick={() => setAllAttachments(!allAttachments)}>
+              {allAttachments
+                ? 'Show fewer attachments'
+                : `Show all attachments (${task.documents.length})`}
+            </button>
+          )}
+        </div>
+        <div className="analysis-action">
+          {processing && (
+            <AnalysisActivity
+              savedResult={savedResult?.result ?? null}
+              hasAttachments={task.documents.length > 0}
+            />
+          )}
+          {!result && (
+            <button className="button primary" onClick={reanalyze} disabled={processing}>
+              {processing
+                ? phase === 'preparing'
+                  ? 'Preparing results…'
+                  : 'Analyzing…'
+                : phase === 'failed' || task.latest_run?.status === 'FAILED'
+                  ? 'Retry analysis'
+                  : 'Start analysis'}
+            </button>
+          )}
+        </div>
+      </section>
+      {result && (processing || phase === 'failed') && (
+        <p className="previous-result-label">Previous result · Last saved analysis</p>
+      )}
+      {phase === 'revealed' && result && (
+        <div className="analysis-summary" role="status" ref={summaryRef} tabIndex={-1}>
+          <strong>Analysis saved</strong>
+          <span>
+            {task.category ? categoryLabels[task.category] : 'Needs classification review'}
+            {task.category === 'BL_COMPARISON'
+              ? ` · ${result.known_defect_fields.length} discrepancies · ${result.review_requirements.length} review requirements`
+              : ''}
+          </span>
+          <small>{analyzedAt(task.last_analyzed)}</small>
         </div>
       )}
       {task.latest_run?.status === 'FAILED' && (
@@ -218,11 +301,6 @@ function TaskWorkspace({ task, reload }: { task: SampleDetail; reload: () => voi
           </div>
         </div>
       )}
-      {!task.latest_run && (
-        <div className="notice warning">
-          This email has not been analyzed. No comparison result is available yet.
-        </div>
-      )}
       <details className="email-context" open={!comparison}>
         <summary>
           <EnvelopeSimpleIcon size={17} />
@@ -230,22 +308,6 @@ function TaskWorkspace({ task, reload }: { task: SampleDetail; reload: () => voi
         </summary>
         <div className="email-body">
           <p className="preserve-lines">{task.body}</p>
-          <div className="attachment-list">
-            {task.documents.map((doc) => (
-              <a
-                className="button compact"
-                href={documentUrl(task.id, doc.id)}
-                target="_blank"
-                rel="noreferrer"
-                key={doc.id}
-              >
-                <FileTextIcon size={16} />
-                {doc.filename}
-                <ArrowSquareOutIcon size={14} />
-              </a>
-            ))}
-          </div>
-          {!task.documents.length && <p>No attachments were provided.</p>}
         </div>
       </details>
       <div className="version-bar">
@@ -416,15 +478,12 @@ function TaskWorkspace({ task, reload }: { task: SampleDetail; reload: () => voi
                 )}
                 {source?.error && <p className="notice warning">{source.error.message}</p>}
                 {document && (
-                  <a
+                  <button
                     className="button compact"
-                    href={documentUrl(task.id, document.id, fieldEvidence[0]?.page)}
-                    target="_blank"
-                    rel="noreferrer"
+                    onClick={() => setPreview({ id: document.id, page: fieldEvidence[0]?.page })}
                   >
                     Open original{fieldEvidence[0]?.page ? ` · page ${fieldEvidence[0].page}` : ''}
-                    <ArrowSquareOutIcon size={14} />
-                  </a>
+                  </button>
                 )}
                 {!!source?.units.length && (
                   <details className="source-transcript">
@@ -468,6 +527,16 @@ function TaskWorkspace({ task, reload }: { task: SampleDetail; reload: () => voi
             </div>
           </section>
         </div>
+      )}
+      {preview && task.documents.some((doc) => doc.id === preview.id) && (
+        <DocumentPreview
+          key={preview.id}
+          emailId={task.id}
+          document={task.documents.find((doc) => doc.id === preview.id)!}
+          parsed={parsed.find((doc) => doc.id === preview.id)}
+          initialPage={preview.page}
+          onClose={() => setPreview(null)}
+        />
       )}
       <div className="workspace-bottom">
         <section className="panel review-history">

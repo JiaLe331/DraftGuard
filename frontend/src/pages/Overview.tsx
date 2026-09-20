@@ -36,9 +36,9 @@ const cards = [
     color: 'amber',
   },
   {
-    key: 'WAITING_DOCUMENT',
-    label: 'Awaiting documents',
-    caption: 'Waiting for the source pair',
+    key: 'NOT_ANALYZED',
+    label: 'Awaiting analysis',
+    caption: 'Open an email to start a check',
     icon: ClockIcon,
     color: 'slate',
   },
@@ -65,6 +65,7 @@ export function Overview({ inbox = false }: { inbox?: boolean }) {
     if (value) next.set(key, value)
     else next.delete(key)
     if (key !== 'page') next.delete('page')
+    if (key === 'status' && value === 'NOT_ANALYZED') next.delete('category')
     setParams(next)
   }
   function retry() {
@@ -77,7 +78,7 @@ export function Overview({ inbox = false }: { inbox?: boolean }) {
       (data?.summary.states.REVIEW_REQUIRED ?? 0) +
       (data?.summary.states.DISCREPANCIES_FOUND ?? 0) +
       (data?.summary.states.FAILED ?? 0),
-    WAITING_DOCUMENT: data?.summary.states.WAITING_DOCUMENT ?? 0,
+    NOT_ANALYZED: data?.summary.states.NOT_ANALYZED ?? 0,
     READY: data?.summary.states.READY ?? 0,
   }
   const from = location.pathname + location.search
@@ -259,7 +260,11 @@ export function Overview({ inbox = false }: { inbox?: boolean }) {
                     <span
                       className={`category-tag ${task.category === 'BL_COMPARISON' ? 'comparison' : ''}`}
                     >
-                      {task.category ? categoryLabels[task.category] : 'Needs classification'}
+                      {task.category
+                        ? categoryLabels[task.category]
+                        : task.workflow_state === 'NOT_ANALYZED'
+                          ? 'Not classified yet'
+                          : 'Needs classification'}
                     </span>
                   </div>
                   <div className="task-finding" role="cell">

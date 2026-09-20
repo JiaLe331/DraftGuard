@@ -192,6 +192,63 @@ describe('audit trail', () => {
     expect(screen.getByText('No recorded events match these filters.')).toBeInTheDocument()
   })
 
+  it('opens the correct SI and BL source for a mailbox comparison event', async () => {
+    const other = { ...source, document_id: 'doc-2', text: 'Total Gross Weight: 26 MT' }
+    const compared: AuditEvent = {
+      ...event,
+      stage: 'comparison',
+      document_id: null,
+      details: {
+        field: 'gross_weight_kg',
+        finding: 'MISMATCH',
+        si: {
+          raw_value: '25 MT',
+          normalized_value: '25000',
+          value_state: 'PRESENT',
+          reason: 'shared_extractor',
+          evidence: [{ document_id: 'doc-1', unit_id: 'unit-1' }],
+        },
+        bl: {
+          raw_value: '26 MT',
+          normalized_value: '26000',
+          value_state: 'PRESENT',
+          reason: 'shared_extractor',
+          evidence: [{ document_id: 'doc-2', unit_id: 'unit-1' }],
+        },
+      },
+    }
+    const mailboxRun: ExtractionRun = {
+      ...run,
+      source_type: 'mailbox_email',
+      mailbox: {
+        email_id: 'email_004',
+        run_id: 'mailbox-run',
+        revision: 1,
+        mode: 'interactive',
+      },
+      documents: [
+        run.documents[0],
+        { ...run.documents[0], document_id: 'doc-2', source_units: [other] },
+      ],
+    }
+    const { router } = setup('/audit/runs/run-1?event=1', (path) =>
+      path.includes('/events?')
+        ? response(page([compared]))
+        : path === '/api/v1/dev/runs/run-1'
+          ? response(mailboxRun)
+          : undefined,
+    )
+    expect(await screen.findByRole('link', { name: 'Open mailbox results' })).toHaveAttribute(
+      'href',
+      '/tasks/email_004',
+    )
+    await userEvent.click(await screen.findByRole('button', { name: 'BL · Page 1' }))
+    expect(screen.getByTestId('audit-source-evidence')).toHaveTextContent(other.text)
+    expect(router.state.location.search).toContain('document=doc-2')
+    await userEvent.click(screen.getByRole('button', { name: 'SI · Page 1' }))
+    expect(screen.getByTestId('audit-source-evidence')).toHaveTextContent(source.text)
+  })
+
   it('does not request saved runs or events when the feature is disabled', async () => {
     const { fetchMock } = setup('/audit/runs/run-1', (path) =>
       path === '/api/health'

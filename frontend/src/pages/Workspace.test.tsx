@@ -1,4 +1,4 @@
-import { act, render, screen, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
@@ -258,6 +258,61 @@ describe('dataset mailbox journeys', () => {
       await screen.findByRole('heading', { name: 'No emails on this page' }),
     ).toBeInTheDocument()
   })
+  it('starts background analysis once and links the live and historical audit', async () => {
+    let current = sample()
+    let activeReads = 0
+    const fetcher = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === '/api/health') return json({ capabilities: { development_extraction: true } })
+      if (url.startsWith('/api/v1/samples?')) {
+        const list = listing()
+        if (current.latest_run?.id === 'new-run' && current.latest_run.status === 'SUCCEEDED')
+          list.summary.states = { DISCREPANCIES_FOUND: 12 }
+        return json(list)
+      }
+      if (options?.method === 'POST') {
+        expect(url).toContain('/analyze?wait=false')
+        current = {
+          ...current,
+          latest_run: {
+            ...current.latest_run!,
+            id: 'new-run',
+            audit_run_id: 'audit-new',
+            status: 'RUNNING',
+          },
+        }
+        return json(current, 202)
+      }
+      if (current.latest_run?.status === 'RUNNING' && ++activeReads >= 2) {
+        const done = { ...current.latest_run, status: 'SUCCEEDED' as const }
+        current = { ...current, latest_run: done, current_run: done, runs: [done] }
+      }
+      return json(current)
+    })
+    vi.stubGlobal('fetch', fetcher)
+    renderRoute('/tasks/email_test')
+    await userEvent.dblClick(await screen.findByRole('button', { name: 'Reanalyze' }))
+    expect(await screen.findByRole('link', { name: 'View live audit' })).toHaveAttribute(
+      'href',
+      '/audit/runs/audit-new',
+    )
+    expect(screen.getByRole('button', { name: 'Analyzing…' })).toBeDisabled()
+    await waitFor(
+      () =>
+        expect(screen.getByRole('link', { name: 'View audit trail' })).toHaveAttribute(
+          'href',
+          '/audit/runs/audit-new',
+        ),
+      { timeout: 3000 },
+    )
+    expect(fetcher.mock.calls.filter(([, options]) => options?.method === 'POST')).toHaveLength(1)
+    await waitFor(() =>
+      expect(screen.getByRole('link', { name: /^Overview/ })).toHaveTextContent('Overview12'),
+    )
+    expect(
+      screen.getByRole('link', { name: 'Open this run’s audit', hidden: true }),
+    ).toHaveAttribute('href', '/audit/runs/audit-new')
+  })
+
   it('shows scan blockers without fabricated extracted values', async () => {
     const detail = sample()
     detail.workflow_state = 'REVIEW_REQUIRED'

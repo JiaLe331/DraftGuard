@@ -65,9 +65,11 @@ function RunDetails({ run, refresh }: { run: ExtractionRun; refresh: () => void 
         <div className="extraction-panel-heading">
           <div>
             <span className="eyebrow">
-              {run.source_type === 'dataset_email'
-                ? `DATASET EMAIL · ${run.email?.email_id}`
-                : 'MANUAL UPLOAD'}
+              {run.mailbox
+                ? `MAILBOX EMAIL · ${run.mailbox.email_id}`
+                : run.source_type === 'dataset_email'
+                  ? `DATASET EMAIL · ${run.email?.email_id}`
+                  : 'MANUAL UPLOAD'}
             </span>
             <h2>{run.source_label}</h2>
             <p>
@@ -82,6 +84,11 @@ function RunDetails({ run, refresh }: { run: ExtractionRun; refresh: () => void 
           source review; this is not shipment approval.
         </p>
         <div className="extraction-actions">
+          {run.mailbox && (
+            <Link className="button" to={`/tasks/${encodeURIComponent(run.mailbox.email_id)}`}>
+              Open mailbox results
+            </Link>
+          )}
           <Link
             className="button primary"
             to={`/audit/runs/${run.run_id}${document ? `?document=${document.document_id}` : ''}`}
@@ -139,7 +146,10 @@ function RunDetails({ run, refresh }: { run: ExtractionRun; refresh: () => void 
                 {item.filename}
               </span>
               <span className="extraction-document-state">
-                <small>{item.result?.detected_role ?? 'Role unconfirmed'}</small>
+                <small>
+                  {item.result?.detected_role ??
+                    (item.processing_status === 'SKIPPED' ? 'Not required' : 'Role unconfirmed')}
+                </small>
                 <ExtractionStatus
                   state={
                     item.error ||
@@ -147,7 +157,7 @@ function RunDetails({ run, refresh }: { run: ExtractionRun; refresh: () => void 
                     item.processing_status === 'INTERRUPTED' ||
                     item.result?.needs_review
                       ? 'review'
-                      : item.processing_status === 'SUCCEEDED'
+                      : ['SUCCEEDED', 'SKIPPED'].includes(item.processing_status)
                         ? 'ready'
                         : 'processing'
                   }
@@ -158,9 +168,11 @@ function RunDetails({ run, refresh }: { run: ExtractionRun; refresh: () => void 
                         ? 'Interrupted'
                         : item.result?.needs_review
                           ? 'Needs review'
-                          : item.processing_status === 'SUCCEEDED'
-                            ? 'Extracted'
-                            : 'Processing'
+                          : item.processing_status === 'SKIPPED'
+                            ? 'Skipped'
+                            : item.processing_status === 'SUCCEEDED'
+                              ? 'Extracted'
+                              : 'Processing'
                   }
                 />
               </span>
@@ -207,6 +219,12 @@ function DocumentInspector({ document, runId }: { document: ExtractedDocument; r
         <div className="notice warning" role="alert">
           {document.error.message}
         </div>
+      )}
+      {document.processing_status === 'SKIPPED' && (
+        <p className="notice">
+          This email did not request SI/BL comparison. The original attachment was retained without
+          extraction.
+        </p>
       )}
       {result && (
         <div className="extraction-results-grid">

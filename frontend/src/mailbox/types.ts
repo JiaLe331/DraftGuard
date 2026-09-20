@@ -120,6 +120,7 @@ export interface Result {
   processing_status: string
 }
 export interface RunSummary {
+  audit_run_id?: string | null
   id: string
   revision: number
   pipeline_version: string

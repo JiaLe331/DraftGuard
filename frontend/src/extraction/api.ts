@@ -94,6 +94,7 @@ export type RunSummary = {
   document_count: number
 }
 export type ExtractionRun = RunSummary & {
+  mailbox?: { email_id: string; run_id: string; revision: number; mode: string }
   audit_version?: number
   events?: AuditEvent[]
   request_id: string
@@ -143,5 +144,9 @@ export function runLabel(run: RunSummary) {
   if (run.processing_status === 'RUNNING') return 'Processing'
   if (run.processing_status === 'INTERRUPTED') return 'Interrupted'
   if (run.processing_status === 'FAILED') return 'Finished with errors'
-  return run.needs_review ? 'Needs review' : 'Extraction finished'
+  return run.needs_review
+    ? 'Needs review'
+    : run.source_type === 'mailbox_email'
+      ? 'Analysis finished'
+      : 'Extraction finished'
 }

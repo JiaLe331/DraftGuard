@@ -100,7 +100,7 @@ function AuditList() {
       <div className="extraction-panel-heading">
         <div>
           <h2>Processing runs</h2>
-          <p>Every extraction has its own saved record. This list refreshes automatically.</p>
+          <p>Every processing run has its own saved record. This list refreshes automatically.</p>
         </div>
         <button className="button" onClick={resource.reload}>
           <ArrowClockwiseIcon size={18} /> Refresh
@@ -140,6 +140,7 @@ function AuditList() {
           >
             <option value="">All sources</option>
             <option value="dataset_email">Dataset email</option>
+            <option value="mailbox_email">Mailbox analysis</option>
             <option value="upload">Manual upload</option>
           </select>
         </label>
@@ -181,8 +182,12 @@ function AuditList() {
                         {run.source_label} <ArrowRightIcon size={16} />
                       </Link>
                       <small>
-                        {run.source_type === 'upload' ? 'Manual upload' : 'Dataset email'} ·{' '}
-                        {run.run_id}
+                        {run.source_type === 'mailbox_email'
+                          ? 'Mailbox analysis'
+                          : run.source_type === 'upload'
+                            ? 'Manual upload'
+                            : 'Dataset email'}{' '}
+                        · {run.run_id}
                       </small>
                     </td>
                     <td>{new Date(run.created_at).toLocaleString()}</td>
@@ -266,7 +271,11 @@ function AuditRun({ runId }: { runId: string }) {
             <div className="extraction-panel-heading">
               <div>
                 <div className="eyebrow">
-                  {run.email ? `DATASET EMAIL · ${run.email.email_id}` : 'MANUAL UPLOAD'}
+                  {run.mailbox
+                    ? `MAILBOX EMAIL · ${run.mailbox.email_id}`
+                    : run.email
+                      ? `DATASET EMAIL · ${run.email.email_id}`
+                      : 'MANUAL UPLOAD'}
                 </div>
                 <h2>{run.source_label}</h2>
                 <p>
@@ -277,6 +286,11 @@ function AuditRun({ runId }: { runId: string }) {
               <RunStatus run={run} />
             </div>
             <div className="extraction-actions">
+              {run.mailbox && (
+                <Link className="button" to={`/tasks/${encodeURIComponent(run.mailbox.email_id)}`}>
+                  Open mailbox results
+                </Link>
+              )}
               <Link className="button primary" to={`/extraction/runs/${run.run_id}`}>
                 <FileTextIcon size={18} /> View extraction results
               </Link>
@@ -384,13 +398,18 @@ function AuditRun({ runId }: { runId: string }) {
                     onChange={(e) => update({ outcome: e.target.value, event: null })}
                   >
                     <option value="">All outcomes</option>
-                    {['STARTED', 'SUCCEEDED', 'NEEDS_REVIEW', 'FAILED', 'INTERRUPTED'].map(
-                      (status) => (
-                        <option key={status} value={status}>
-                          {human(status)}
-                        </option>
-                      ),
-                    )}
+                    {[
+                      'STARTED',
+                      'SUCCEEDED',
+                      'NEEDS_REVIEW',
+                      'FAILED',
+                      'INTERRUPTED',
+                      'SKIPPED',
+                    ].map((status) => (
+                      <option key={status} value={status}>
+                        {human(status)}
+                      </option>
+                    ))}
                   </select>
                 </label>
                 <label>
@@ -465,7 +484,12 @@ function AuditRun({ runId }: { runId: string }) {
                       </button>
                       {expanded && (
                         <div className="audit-event-body" id={`event-${item.sequence}`}>
-                          <EventDetails item={item} document={doc} evidence={evidence} />
+                          <EventDetails
+                            item={item}
+                            document={doc}
+                            documents={run.documents}
+                            evidence={evidence}
+                          />
                           <details className="extraction-details">
                             <summary>Recorded event JSON</summary>
                             <pre>{JSON.stringify(item, null, 2)}</pre>
@@ -516,10 +540,12 @@ function AuditRun({ runId }: { runId: string }) {
 function EventDetails({
   item,
   document,
+  documents,
   evidence,
 }: {
   item: AuditEvent
   document?: ExtractedDocument
+  documents: ExtractedDocument[]
   evidence: (document: ExtractedDocument, unitId: string) => void
 }) {
   const details = item.details
@@ -544,6 +570,55 @@ function EventDetails({
     : []
   return (
     <>
+      {item.stage === 'classification' &&
+        typeof details.classification === 'object' &&
+        details.classification !== null && (
+          <p>
+            Email category:{' '}
+            <strong>
+              {valueText((details.classification as Record<string, unknown>).category)}
+            </strong>
+          </p>
+        )}
+      {item.stage === 'comparison' &&
+        (['si', 'bl'] as const).map((role) => {
+          const value = details[role] as Record<string, unknown> | undefined
+          if (!value) return null
+          const refs = Array.isArray(value.evidence)
+            ? (value.evidence as Record<string, unknown>[])
+            : []
+          return (
+            <div className="audit-candidate" key={role}>
+              <strong>{role.toUpperCase()}</strong>
+              <dl className="audit-values">
+                <dt>Original value</dt>
+                <dd>{valueText(value.raw_value)}</dd>
+                <dt>Normalized value</dt>
+                <dd>{valueText(value.normalized_value)}</dd>
+                <dt>State / reason</dt>
+                <dd>
+                  {valueText(value.value_state)} · {valueText(value.reason)}
+                </dd>
+              </dl>
+              <div className="extraction-evidence-buttons">
+                {refs.map((ref) => {
+                  const doc = documents.find((doc) => doc.document_id === ref.document_id)
+                  const unit = (doc?.source_units ?? doc?.result?.source_units ?? []).find(
+                    (unit) => unit.unit_id === ref.unit_id,
+                  )
+                  return doc && unit ? (
+                    <button
+                      key={`${doc.document_id}:${unit.unit_id}`}
+                      onClick={() => evidence(doc, unit.unit_id)}
+                    >
+                      {role.toUpperCase()} · {locationLabel(unit)}
+                    </button>
+                  ) : null
+                })}
+              </div>
+            </div>
+          )
+        })}
       {details.parser != null && (
         <p>
           Selected parser: <strong>{String(details.parser)}</strong>

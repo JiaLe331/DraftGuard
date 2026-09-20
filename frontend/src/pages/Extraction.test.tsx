@@ -145,6 +145,27 @@ function setup(
 
 afterEach(() => vi.unstubAllGlobals())
 
+it('shows retained mailbox attachments as skipped when comparison was not requested', async () => {
+  const skipped: ExtractionRun = {
+    ...run,
+    source_type: 'mailbox_email',
+    mailbox: { email_id: 'email_004', run_id: 'run-1', revision: 1, mode: 'interactive' },
+    documents: [{ ...run.documents[0], result: null, processing_status: 'SKIPPED' }],
+    document_count: 1,
+  }
+  setup('/extraction/runs/run-1', (path) =>
+    path === '/api/v1/dev/runs/run-1' ? Promise.resolve(response(skipped)) : undefined,
+  )
+  expect(await screen.findByText('MAILBOX EMAIL · email_004')).toBeInTheDocument()
+  expect(screen.getByText('Skipped')).toBeInTheDocument()
+  expect(screen.getByText(/retained without extraction/)).toBeInTheDocument()
+  expect(screen.queryByText('Processing')).not.toBeInTheDocument()
+  expect(screen.getByRole('link', { name: 'Open mailbox results' })).toHaveAttribute(
+    'href',
+    '/tasks/email_004',
+  )
+})
+
 describe('local extraction journeys', () => {
   it('opens an email without processing, then extracts all attachments in one request', async () => {
     const { fetchMock } = setup()

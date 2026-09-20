@@ -17,17 +17,23 @@ import {
   type SampleDetail,
   type FieldResult,
 } from '../mailbox/types'
+import type { Health } from '../extraction/api'
 import { EmptyState, StatusBadge } from '../components/Primitives'
 import { Report } from '../components/Report'
 
 export function Workspace() {
   const { taskId } = useParams()
+  const { refresh } = useMailbox()
   const { data, error, reload } = useResource<SampleDetail>(
     `/api/v1/samples/${encodeURIComponent(taskId ?? '')}`,
   )
+  const completedRunId = data?.latest_run?.status !== 'RUNNING' ? data?.latest_run?.id : undefined
+  useEffect(() => {
+    if (completedRunId) refresh()
+  }, [completedRunId, refresh])
   useEffect(() => {
     if (data?.latest_run?.status !== 'RUNNING') return
-    const timer = setTimeout(reload, 3000)
+    const timer = setTimeout(reload, 1000)
     return () => clearTimeout(timer)
   }, [data?.latest_run?.status, reload])
   if (error)
@@ -60,6 +66,8 @@ export function Workspace() {
 }
 function TaskWorkspace({ task, reload }: { task: SampleDetail; reload: () => void }) {
   const { refresh } = useMailbox()
+  const health = useResource<Health>('/api/health')
+  const auditEnabled = !!health.data?.capabilities?.development_extraction
   const location = useLocation()
   const [params, setParams] = useSearchParams()
   const [busy, setBusy] = useState(false)
@@ -91,11 +99,14 @@ function TaskWorkspace({ task, reload }: { task: SampleDetail; reload: () => voi
     setBusy(true)
     setError('')
     try {
-      await request<SampleDetail>(`/api/v1/dev/samples/${encodeURIComponent(task.id)}/analyze`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ expected_revision: task.revision }),
-      })
+      await request<SampleDetail>(
+        `/api/v1/dev/samples/${encodeURIComponent(task.id)}/analyze?wait=false`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ expected_revision: task.revision }),
+        },
+      )
       reload()
       refresh()
     } catch (e) {
@@ -147,6 +158,11 @@ function TaskWorkspace({ task, reload }: { task: SampleDetail; reload: () => voi
         </Link>
         <span>{task.id}</span>
         <div className="breadcrumb-actions">
+          {auditEnabled && task.latest_run?.audit_run_id && (
+            <Link className="button compact" to={`/audit/runs/${task.latest_run.audit_run_id}`}>
+              {task.latest_run.status === 'RUNNING' ? 'View live audit' : 'View audit trail'}
+            </Link>
+          )}
           <button className="button compact" onClick={reload} disabled={busy}>
             Refresh
           </button>
@@ -475,6 +491,11 @@ function TaskWorkspace({ task, reload }: { task: SampleDetail; reload: () => voi
                         ? ' · Current saved result'
                         : ' · Not the current result'}
                     </small>
+                    {auditEnabled && run.audit_run_id ? (
+                      <Link to={`/audit/runs/${run.audit_run_id}`}>Open this run’s audit</Link>
+                    ) : !run.audit_run_id ? (
+                      <small>Legacy analysis · no live audit was recorded</small>
+                    ) : null}
                   </div>
                 </div>
               ))}

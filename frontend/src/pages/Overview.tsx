@@ -504,7 +504,7 @@ function LocalTaskList() {
       ) : !data ? (
         <p role="status">Loading working copies…</p>
       ) : data.items.length === 0 ? (
-        <p>Open a sample and choose Create working copy to check revised sources.</p>
+        <p>Open a pre-analyzed inbox email and choose Start review to check revised sources.</p>
       ) : (
         <ul>
           {data.items.map((task) => (

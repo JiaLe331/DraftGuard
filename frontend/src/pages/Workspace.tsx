@@ -276,8 +276,8 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
         <div className="notice read-only-notice" role="status">
           <ShieldCheckIcon size={20} aria-hidden="true" />
           <div>
-            <strong>Read-only sample</strong>
-            <p>Create a local working copy to analyze, replace sources, review, or complete.</p>
+            <strong>Pre-analyzed inbox email</strong>
+            <p>Start a review to replace sources, use review tools, or complete the check.</p>
           </div>
         </div>
       )}
@@ -852,8 +852,8 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
         )}
       </div>
       <p className="workspace-disclaimer">
-        {localTask ? 'Local working copy' : 'Demo mailbox · Provided dataset'}. This seven-field
-        check is not a complete bill-of-lading approval.
+        {localTask ? 'Review workspace' : 'Demo mailbox · Provided dataset'}. This seven-field check
+        is not a complete bill-of-lading approval.
       </p>
       {result && <Report task={{ ...task, is_historical: historical }} />}
     </div>

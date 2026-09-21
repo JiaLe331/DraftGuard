@@ -37,11 +37,10 @@ export function CloneTask({
     <section className="panel task-sources">
       <h2>Check a revised document</h2>
       <p>
-        Create a local working copy to add or replace SI / BL sources. The provided sample stays
-        unchanged.
+        Start a review to add or replace SI / BL sources. The original inbox email stays unchanged.
       </p>
       <button className="button primary" disabled={disabled || busy} onClick={clone}>
-        {busy ? 'Creating working copy…' : 'Create working copy'}
+        {busy ? 'Starting review…' : 'Start review'}
       </button>
       {error && (
         <p role="alert" className="form-error">
@@ -119,7 +118,7 @@ export function TaskSources({
     <section className="panel task-sources">
       <h2>Current source pair</h2>
       <p>
-        Local working copy · Revision {task.revision}. Every saved change starts a new seven-field
+        Review workspace · Revision {task.revision}. Every saved change starts a new seven-field
         check.
       </p>
       <form onSubmit={(event) => save(event, true)}>

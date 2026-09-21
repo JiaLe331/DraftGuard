@@ -946,7 +946,7 @@ describe('local task revision journeys', () => {
     vi.stubGlobal('fetch', fetcher)
     const user = userEvent.setup()
     const router = renderRoute('/tasks/email_test')
-    await user.click(await screen.findByRole('button', { name: 'Create working copy' }))
+    await user.click(await screen.findByRole('button', { name: 'Start review' }))
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/task-copy'))
     expect(fetcher).toHaveBeenCalledWith(
       '/api/v1/dev/tasks',
@@ -991,7 +991,7 @@ describe('local task revision journeys', () => {
       '/api/v1/dev/tasks/task-copy/analyze?wait=false',
       expect.objectContaining({ body: JSON.stringify({ expected_revision: 2 }) }),
     )
-    expect(screen.getByText(/Local working copy · Revision 2/)).toBeInTheDocument()
+    expect(screen.getByText(/Review workspace · Revision 2/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Retry analysis' }))
     expect(fetcher.mock.calls.filter(([url]) => url.endsWith('/documents'))).toHaveLength(1)
   })

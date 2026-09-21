@@ -42,11 +42,20 @@ export function Avatar({ initials, color = 'blue' }: { initials: string; color?:
     </span>
   )
 }
-export function EmptyState({ title, children }: { title: string; children: ReactNode }) {
+export function EmptyState({
+  title,
+  children,
+  tone = 'neutral',
+}: {
+  title: string
+  children: ReactNode
+  tone?: 'neutral' | 'error'
+}) {
+  const Icon = tone === 'error' ? WarningCircleIcon : CircleIcon
   return (
-    <div className="empty-state">
+    <div className={`empty-state empty-state-${tone}`}>
       <div className="empty-icon">
-        <CircleIcon size={30} />
+        <Icon aria-hidden="true" size={24} weight={tone === 'error' ? 'fill' : 'regular'} />
       </div>
       <h2>{title}</h2>
       {children}

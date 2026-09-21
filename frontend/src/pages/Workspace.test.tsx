@@ -33,7 +33,7 @@ function sample(): SampleDetail {
   const result = {
     classification: {
       category: 'BL_COMPARISON' as const,
-      method: 'rule',
+      method: 'rule' as const,
       status: 'CLASSIFIED',
       reason: 'Matched email intent.',
     },
@@ -65,6 +65,7 @@ function sample(): SampleDetail {
   }
   return {
     id: 'email_test',
+    record_kind: 'sample',
     subject: 'Please check the draft',
     sender: 'sender@example.test',
     body: 'Original email body, not a generated summary.',
@@ -101,6 +102,9 @@ function listing(): SampleList {
       states: { DISCREPANCIES_FOUND: 10, REVIEW_REQUIRED: 5, READY: 40 },
     },
   }
+}
+function workingSample(): SampleDetail {
+  return { ...sample(), record_kind: 'task' }
 }
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -180,7 +184,7 @@ describe('dataset mailbox journeys', () => {
   })
   it('shows a first analysis journey without fabricated previous results', async () => {
     const pending: SampleDetail = {
-      ...sample(),
+      ...workingSample(),
       category: null,
       workflow_state: 'NOT_ANALYZED',
       current_run: null,
@@ -199,9 +203,9 @@ describe('dataset mailbox journeys', () => {
         if (options?.method === 'POST') {
           await wait
           saved = true
-          return json(sample())
+          return json(workingSample())
         }
-        return json(url.includes('/samples?') ? listing() : saved ? sample() : pending)
+        return json(url.includes('/samples?') ? listing() : saved ? workingSample() : pending)
       }),
     )
     renderRoute('/tasks/email_test')
@@ -223,7 +227,7 @@ describe('dataset mailbox journeys', () => {
   })
   it('shows only real files and expands more than two attachments', async () => {
     const pending = {
-      ...sample(),
+      ...workingSample(),
       current_run: null,
       latest_run: null,
       category: null,
@@ -252,7 +256,7 @@ describe('dataset mailbox journeys', () => {
   })
   it('offers classification for email without invented attachments', async () => {
     const pending = {
-      ...sample(),
+      ...workingSample(),
       current_run: null,
       latest_run: null,
       category: null,
@@ -290,7 +294,7 @@ describe('dataset mailbox journeys', () => {
     expect(print).toHaveBeenCalledOnce()
   })
   it('retains the last successful result when a rerun fails and recovers on retry', async () => {
-    let current = sample()
+    let current = workingSample()
     let posts = 0
     const fetcher = vi.fn(async (url: string, options?: RequestInit) => {
       if (options?.method === 'POST') {
@@ -308,7 +312,11 @@ describe('dataset mailbox journeys', () => {
               error: { code: 'analysis_timeout', message: 'Analysis timed out. Retry this email.' },
             },
           }
-        else current = { ...sample(), latest_run: { ...sample().latest_run!, id: 'run-new' } }
+        else
+          current = {
+            ...workingSample(),
+            latest_run: { ...workingSample().latest_run!, id: 'run-new' },
+          }
       }
       return json(url.startsWith('/api/v1/samples?') ? listing() : current)
     })
@@ -351,7 +359,7 @@ describe('dataset mailbox journeys', () => {
     ).toBeInTheDocument()
   })
   it('starts background analysis once and links the live and historical audit', async () => {
-    let current = sample()
+    let current = workingSample()
     let activeReads = 0
     const fetcher = vi.fn(async (url: string, options?: RequestInit) => {
       if (url === '/api/health') return json({ capabilities: { development_extraction: true } })
@@ -427,6 +435,7 @@ function localTask(): SampleDetail {
   return {
     ...sample(),
     id: 'task-copy',
+    record_kind: 'task',
     baseline_id: 'email_test',
     current_si_id: 'si',
     current_bl_id: 'bl',
@@ -443,6 +452,8 @@ function visualTask(): SampleDetail {
   machine.coverage = { checked: 0, total: 7 }
   machine.provider_calls = [
     {
+      operation: 'vision_extraction',
+      document_id: 'bl',
       provider: 'gemini',
       configured_model: 'fake-model',
       model_version: 'fake-v1',
@@ -562,12 +573,74 @@ function taskApi(task = localTask()) {
     if (url.startsWith('/api/v1/samples?')) return json(listing())
     if (url.startsWith('/api/v1/dev/tasks?') && options?.method !== 'POST')
       return json({ ...listing(), items: [task] })
-    if (url === '/api/v1/samples/email_test') return json(sample())
+    if (url === '/api/v1/records/email_test') return json(sample())
     return json(task)
   })
 }
 
 describe('local task revision journeys', () => {
+  it('creates a validated custom task and focuses its workspace heading', async () => {
+    const created = { ...localTask(), id: 'opaque-custom-id', subject: 'Local manifest review' }
+    const base = taskApi(created)
+    const fetcher = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === '/api/v1/dev/tasks/custom' && options?.method === 'POST') return json(created)
+      return base(url, options)
+    })
+    vi.stubGlobal('fetch', fetcher)
+    const user = userEvent.setup()
+    const router = renderRoute('/inbox')
+
+    await user.click(await screen.findByRole('button', { name: 'Create local task' }))
+    await user.click(screen.getByRole('button', { name: 'Create task' }))
+    expect(screen.getAllByText('This field is required.')).toHaveLength(3)
+    expect(screen.getByLabelText(/Subject/)).toHaveFocus()
+    await user.type(screen.getByLabelText(/Subject/), 'Local manifest review')
+    await user.type(screen.getByLabelText(/Sender/), 'ops@example.test')
+    await user.type(screen.getByLabelText(/Email body/), 'Compare the attached shipping files.')
+    await user.click(screen.getByRole('button', { name: 'Create task' }))
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/opaque-custom-id'))
+    expect(await screen.findByRole('heading', { name: 'Local manifest review' })).toHaveFocus()
+    const body = JSON.parse(
+      fetcher.mock.calls.find(([url]) => url === '/api/v1/dev/tasks/custom')![1]!.body as string,
+    )
+    expect(body).toEqual({
+      subject: 'Local manifest review',
+      sender: 'ops@example.test',
+      body: 'Compare the attached shipping files.',
+    })
+  })
+
+  it('binds a rule correction to an explicit source unit', async () => {
+    const task = localTask()
+    let submitted: Record<string, unknown> | undefined
+    const fetcher = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url.endsWith('/reviews') && options?.method === 'POST') {
+        submitted = JSON.parse(options.body as string)
+        return json(task)
+      }
+      return taskApi(task)(url, options)
+    })
+    vi.stubGlobal('fetch', fetcher)
+    const user = userEvent.setup()
+    renderRoute('/tasks/task-copy')
+
+    await user.click(await screen.findByRole('button', { name: 'Inspect BL Shipper' }))
+    await user.click(screen.getByRole('button', { name: 'Correct extraction' }))
+    expect(
+      screen.getAllByText('Consignee: SOURCE LTD', { selector: 'pre' }).length,
+    ).toBeGreaterThan(0)
+    await user.clear(screen.getByLabelText('Value visible in the source'))
+    await user.type(screen.getByLabelText('Value visible in the source'), 'SOURCE LTD')
+    await user.click(screen.getByRole('button', { name: 'Save correction' }))
+
+    expect(submitted).toMatchObject({
+      action: 'CORRECT_EXTRACTION',
+      evidence: { kind: 'source_unit', unit_id: 'u1' },
+      raw_value: 'SOURCE LTD',
+    })
+  })
+
   it('records supplied information without resolving the field or enabling completion', async () => {
     const task = missingValueTask()
     let submitted: Record<string, unknown> | undefined
@@ -740,8 +813,8 @@ describe('local task revision journeys', () => {
     const user = userEvent.setup()
     renderRoute('/tasks/task-copy')
 
-    expect(await screen.findByText('AI visual candidates · 0/14 reviewed')).toBeInTheDocument()
-    expect(screen.getAllByText(/AI candidate · Confirmation required/)).toHaveLength(14)
+    expect(await screen.findByText('AI candidates · 0/14 reviewed')).toBeInTheDocument()
+    expect(screen.getAllByText(/AI visual candidate · Confirmation required/)).toHaveLength(14)
     await user.click(screen.getByRole('button', { name: 'Inspect BL Shipper' }))
     expect(screen.getByRole('region', { name: 'Source evidence' })).toHaveFocus()
     expect(screen.getByText('AI candidate — confirm against source')).toBeInTheDocument()
@@ -754,7 +827,7 @@ describe('local task revision journeys', () => {
       document_id: 'bl',
       field: 'shipper',
       action: 'CONFIRM_CANDIDATE',
-      evidence: { page: 1 },
+      evidence: { kind: 'visual_page', page: 1 },
     })
     release()
     expect((await screen.findAllByText('Confirmed')).length).toBeGreaterThan(0)
@@ -821,7 +894,7 @@ describe('local task revision journeys', () => {
       }),
     )
     await act(async () => router.navigate('/inbox'))
-    expect(await screen.findByRole('heading', { name: 'Local working copies' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Recent local tasks' })).toBeInTheDocument()
     expect(
       screen
         .getAllByRole('link', { name: 'Please check the draft' })

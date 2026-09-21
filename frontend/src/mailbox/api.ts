@@ -37,11 +37,14 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
     )
   }
 }
+export function recordPath(id: string) {
+  return `/api/v1/records/${encodeURIComponent(id)}`
+}
 export function taskPath(id: string) {
-  return `/api/v1/${id.startsWith('task-') ? 'dev/tasks' : 'samples'}/${encodeURIComponent(id)}`
+  return `/api/v1/dev/tasks/${encodeURIComponent(id)}`
 }
 export function documentUrl(emailId: string, documentId: string, page?: number) {
-  return `${apiBase}${taskPath(emailId)}/documents/${encodeURIComponent(documentId)}/content${page ? `#page=${page}` : ''}`
+  return `${apiBase}${recordPath(emailId)}/documents/${encodeURIComponent(documentId)}/content${page ? `#page=${page}` : ''}`
 }
 export function useResource<T>(path: string) {
   const [attempt, setAttempt] = useState(0)

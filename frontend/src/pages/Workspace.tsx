@@ -14,7 +14,7 @@ import {
   ShieldCheckIcon,
   WarningCircleIcon,
 } from '@phosphor-icons/react'
-import { ApiError, request, taskPath, useResource } from '../mailbox/api'
+import { ApiError, recordPath, request, taskPath, useResource } from '../mailbox/api'
 import { useMailbox } from '../mailbox/context'
 import { useAnalysis } from '../mailbox/useAnalysis'
 import {
@@ -39,9 +39,9 @@ export function Workspace() {
   const { refresh } = useMailbox()
   const [params] = useSearchParams()
   const runId = params.get('run')
-  const path = taskPath(taskId ?? '')
+  const path = recordPath(taskId ?? '')
   const { data, error, reload } = useResource<SampleDetail>(
-    runId && taskId?.startsWith('task-') ? `${path}/runs/${encodeURIComponent(runId)}` : path,
+    runId ? `${path}/runs/${encodeURIComponent(runId)}` : path,
   )
   const completedRunId = data?.latest_run?.status !== 'RUNNING' ? data?.latest_run?.id : undefined
   useEffect(() => {
@@ -115,10 +115,15 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
   const [allAttachments, setAllAttachments] = useState(false)
   const evidenceRef = useRef<HTMLElement>(null)
   const summaryRef = useRef<HTMLDivElement>(null)
+  const headingRef = useRef<HTMLHeadingElement>(null)
   useEffect(() => {
     if (phase === 'revealed') summaryRef.current?.focus({ preventScroll: true })
   }, [phase])
-  const localTask = task.id.startsWith('task-')
+  useEffect(() => {
+    if ((location.state as { focusHeading?: boolean } | null)?.focusHeading)
+      headingRef.current?.focus({ preventScroll: true })
+  }, [location.state])
+  const localTask = task.record_kind === 'task'
   const historical = !!task.is_historical || !!params.get('run')
   const machineResult = task.current_run?.result
   const result = task.current_run?.reviewed_result ?? machineResult
@@ -202,7 +207,7 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
             <PrinterIcon size={16} />
             Print report
           </button>
-          {result && !historical && (
+          {result && localTask && !historical && (
             <button
               className="button primary compact"
               disabled={processing}
@@ -224,7 +229,9 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
       <div className="workspace-heading">
         <div>
           <div className="eyebrow">{task.id} · DOCUMENT WORKSPACE</div>
-          <h1>{task.subject}</h1>
+          <h1 ref={headingRef} tabIndex={-1}>
+            {task.subject}
+          </h1>
           <div className="workspace-byline">
             {task.sender} ·{' '}
             {task.category
@@ -258,6 +265,15 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
           <Link className="button" to={`/tasks/${task.id}`}>
             Return to current revision
           </Link>
+        </div>
+      )}
+      {!localTask && (
+        <div className="notice read-only-notice" role="status">
+          <ShieldCheckIcon size={20} aria-hidden="true" />
+          <div>
+            <strong>Read-only sample</strong>
+            <p>Create a local working copy to analyze, replace sources, review, or complete.</p>
+          </div>
         </div>
       )}
       {localTask && !historical && (
@@ -322,7 +338,7 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
               hasAttachments={task.documents.length > 0}
             />
           )}
-          {!result && !historical && (
+          {!result && localTask && !historical && (
             <button className="button primary" onClick={() => reanalyze()} disabled={processing}>
               {processing
                 ? phase === 'preparing'
@@ -359,11 +375,19 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
             </strong>
             <p>
               {task.latest_run.error?.message}{' '}
+              {task.latest_run.error?.retryable === false
+                ? 'This failure is not retryable without changing the input or configuration. '
+                : 'This failure is retryable. '}
               {result
                 ? 'The last successful result is retained below.'
                 : 'No successful result is available.'}
             </p>
           </div>
+          {localTask && !historical && task.latest_run.error?.retryable !== false && (
+            <button className="button" disabled={processing} onClick={() => reanalyze()}>
+              Retry analysis
+            </button>
+          )}
         </div>
       )}
       <details className="email-context" open={!comparison}>
@@ -385,7 +409,7 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
               ? 'Precomputed · Rules'
               : task.current_run
                 ? result?.provider_calls?.length
-                  ? 'On demand · Rules + AI visual candidates'
+                  ? 'On demand · Rules + AI extraction'
                   : 'On demand · Rules'
                 : 'Not analyzed'}
           </span>
@@ -398,7 +422,7 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
           <SparkleIcon size={18} aria-hidden="true" />
           <div>
             <strong>
-              AI visual candidates · {task.current_run.review_progress.reviewed}/
+              AI candidates · {task.current_run.review_progress.reviewed}/
               {task.current_run.review_progress.total} reviewed
             </strong>
             <p>
@@ -434,7 +458,7 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
           <p>
             {task.category
               ? 'This category does not enter the SI / BL comparison workflow.'
-              : 'No document check is marked complete. Classification needs human review or a future semantic analysis step.'}
+              : 'No document check is marked complete. Classification still requires human review.'}
           </p>
         </section>
       )}
@@ -668,7 +692,7 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
                 </strong>
               </div>
             </div>
-            {field && document && machineExtraction?.method === 'gemini_vision' && (
+            {localTask && field && document && machineExtraction && (
               <ReviewControls
                 key={`${document.id}:${field.key}`}
                 task={task}
@@ -677,6 +701,7 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
                 machine={machineExtraction}
                 effective={effectiveExtraction ?? machineExtraction}
                 pageCount={Math.max(1, ...(source?.units.map((unit) => unit.page ?? 1) ?? [1]))}
+                sourceUnits={source?.units ?? []}
                 historical={historical}
                 onRefresh={reload}
                 onSaved={(next) => {
@@ -685,7 +710,8 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
                 }}
               />
             )}
-            {field &&
+            {localTask &&
+              field &&
               document &&
               machineExtraction &&
               ['MISSING', 'AMBIGUOUS', 'UNREADABLE'].includes(machineExtraction.value_state) && (
@@ -824,7 +850,6 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
 }
 
 function CandidateState({ machine, effective }: { machine?: Extraction; effective: Extraction }) {
-  if (machine?.method !== 'gemini_vision') return null
   if (effective.review?.action === 'CORRECT_EXTRACTION')
     return (
       <span className="candidate-state reviewed">
@@ -837,9 +862,27 @@ function CandidateState({ machine, effective }: { machine?: Extraction; effectiv
         <CheckCircleIcon size={14} aria-hidden="true" /> Confirmed
       </span>
     )
+  if (effective.method === 'human')
+    return (
+      <span className="candidate-state reviewed">
+        <PencilSimpleIcon size={14} aria-hidden="true" /> Human corrected
+      </span>
+    )
+  if (machine?.method === 'gemini_vision')
+    return (
+      <span className="candidate-state pending">
+        <SparkleIcon size={14} aria-hidden="true" /> AI visual candidate · Confirmation required
+      </span>
+    )
+  if (machine?.method === 'gemini_text')
+    return (
+      <span className="candidate-state ai-text">
+        <SparkleIcon size={14} aria-hidden="true" /> AI text extracted
+      </span>
+    )
   return (
-    <span className="candidate-state pending">
-      <SparkleIcon size={14} aria-hidden="true" /> AI candidate · Confirmation required
+    <span className="candidate-state rule">
+      <FileTextIcon size={14} aria-hidden="true" /> Rule extracted
     </span>
   )
 }
@@ -1185,6 +1228,7 @@ function ReviewControls({
   machine,
   effective,
   pageCount,
+  sourceUnits,
   historical,
   onRefresh,
   onSaved,
@@ -1195,14 +1239,17 @@ function ReviewControls({
   machine: Extraction
   effective: Extraction
   pageCount: number
+  sourceUnits: Array<{ id: string; locator: string; text: string }>
   historical: boolean
   onRefresh: () => void
   onSaved: (task: SampleDetail) => void
 }) {
   const candidatePage = machine.evidence[0]?.page ?? 1
+  const visual = machine.method === 'gemini_vision'
   const [editing, setEditing] = useState(false)
   const [rawValue, setRawValue] = useState(machine.raw_value ?? '')
   const [page, setPage] = useState(candidatePage)
+  const [unitId, setUnitId] = useState(machine.evidence[0]?.id ?? sourceUnits[0]?.id ?? '')
   const [busyAction, setBusyAction] = useState<'confirm' | 'correct' | null>(null)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState('')
@@ -1224,7 +1271,12 @@ function ReviewControls({
           field,
           action,
           raw_value: action === 'CORRECT_EXTRACTION' ? rawValue : undefined,
-          evidence: { page: action === 'CONFIRM_CANDIDATE' ? candidatePage : page },
+          evidence: visual
+            ? {
+                kind: 'visual_page',
+                page: action === 'CONFIRM_CANDIDATE' ? candidatePage : page,
+              }
+            : { kind: 'source_unit', unit_id: unitId },
         }),
       })
       onSaved(next)
@@ -1262,14 +1314,16 @@ function ReviewControls({
         </p>
       )}
       <div className="paired-actions">
-        <button
-          className="button primary"
-          disabled={!machine.raw_value || !!busyAction}
-          onClick={() => void save('CONFIRM_CANDIDATE')}
-        >
-          <CheckCircleIcon size={16} aria-hidden="true" />
-          {busyAction === 'confirm' ? 'Confirming…' : 'Confirm candidate'}
-        </button>
+        {visual && (
+          <button
+            className="button primary"
+            disabled={!machine.raw_value || !!busyAction}
+            onClick={() => void save('CONFIRM_CANDIDATE')}
+          >
+            <CheckCircleIcon size={16} aria-hidden="true" />
+            {busyAction === 'confirm' ? 'Confirming…' : 'Confirm candidate'}
+          </button>
+        )}
         <button
           className="button"
           disabled={!!busyAction}
@@ -1282,7 +1336,7 @@ function ReviewControls({
           <PencilSimpleIcon size={16} aria-hidden="true" /> Correct extraction
         </button>
       </div>
-      {!machine.raw_value && (
+      {visual && !machine.raw_value && (
         <p className="candidate-help">
           No candidate can be confirmed. Correct the extraction only if the value is visible in the
           source.
@@ -1312,17 +1366,39 @@ function ReviewControls({
               onChange={(event) => setRawValue(event.target.value)}
             />
           </label>
-          <label className="form-field">
-            Evidence page
-            <input
-              required
-              type="number"
-              min={1}
-              max={pageCount}
-              value={page}
-              onChange={(event) => setPage(event.currentTarget.valueAsNumber)}
-            />
-          </label>
+          {visual ? (
+            <label className="form-field">
+              Evidence page
+              <input
+                required
+                type="number"
+                min={1}
+                max={pageCount}
+                value={page}
+                onChange={(event) => setPage(event.currentTarget.valueAsNumber)}
+              />
+            </label>
+          ) : (
+            <>
+              <label className="form-field">
+                Source unit
+                <select required value={unitId} onChange={(event) => setUnitId(event.target.value)}>
+                  <option value="">Choose source text</option>
+                  {sourceUnits.map((unit) => (
+                    <option key={unit.id} value={unit.id}>
+                      {unit.locator} · {unit.text.slice(0, 80)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {unitId && (
+                <div className="selected-source-unit" aria-live="polite">
+                  <strong>{sourceUnits.find((unit) => unit.id === unitId)?.locator}</strong>
+                  <pre>{sourceUnits.find((unit) => unit.id === unitId)?.text}</pre>
+                </div>
+              )}
+            </>
+          )}
           {error && <ReviewError message={error} onRefresh={onRefresh} />}
           <div className="editor-actions">
             <button
@@ -1333,7 +1409,10 @@ function ReviewControls({
             >
               Cancel
             </button>
-            <button className="button primary" disabled={!!busyAction || !rawValue.trim()}>
+            <button
+              className="button primary"
+              disabled={!!busyAction || !rawValue.trim() || (!visual && !unitId)}
+            >
               {busyAction === 'correct' ? 'Saving correction…' : 'Save correction'}
             </button>
           </div>

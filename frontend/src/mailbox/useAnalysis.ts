@@ -41,6 +41,11 @@ export function useAnalysis(initial: SampleDetail, refresh: () => void) {
 
   async function analyze(source: SampleDetail = task) {
     if (locked.current) return
+    if (source.record_kind !== 'task') {
+      setError('This sample is read only. Create a working copy before analyzing.')
+      setPhase('failed')
+      return
+    }
     locked.current = true
     setTask(source)
     setError('')
@@ -49,15 +54,12 @@ export function useAnalysis(initial: SampleDetail, refresh: () => void) {
     const started = performance.now()
     controller.current = new AbortController()
     try {
-      let next = await request<SampleDetail>(
-        `${source.id.startsWith('task-') ? taskPath(source.id) : `/api/v1/dev/samples/${encodeURIComponent(source.id)}`}/analyze?wait=false`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ expected_revision: source.revision }),
-          signal: controller.current.signal,
-        },
-      )
+      let next = await request<SampleDetail>(`${taskPath(source.id)}/analyze?wait=false`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expected_revision: source.revision }),
+        signal: controller.current.signal,
+      })
       if (!mounted.current) return
       const signal = controller.current.signal
       while (next.latest_run?.status === 'RUNNING') {

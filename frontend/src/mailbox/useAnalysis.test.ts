@@ -7,7 +7,7 @@ vi.mock('./api', async (original) => ({
   ...(await original<typeof import('./api')>()),
   request: vi.fn(),
 }))
-const initial = { id: 'one', revision: 1, latest_run: null } as SampleDetail
+const initial = { id: 'one', record_kind: 'task', revision: 1, latest_run: null } as SampleDetail
 const saved = {
   ...initial,
   latest_run: { id: 'run', status: 'SUCCEEDED', finished_at: 'original-time' },

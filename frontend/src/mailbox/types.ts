@@ -43,6 +43,7 @@ export interface Summary {
 }
 export interface Sample {
   id: string
+  record_kind: 'sample' | 'task'
   subject: string
   sender: string
   revision: number
@@ -144,7 +145,12 @@ export interface RevisionDelta {
 }
 export interface Result {
   revision_delta?: RevisionDelta | null
-  classification: { category: Category | null; method: string; status: string; reason: string }
+  classification: {
+    category: Category | null
+    method: 'rule' | 'gemini'
+    status: string
+    reason: string
+  }
   documents: ParsedDocument[]
   fields: FieldResult[]
   review_requirements: Problem[]
@@ -153,6 +159,8 @@ export interface Result {
   workflow_state: Workflow
   processing_status: string
   provider_calls?: Array<{
+    operation: 'email_classification' | 'text_extraction' | 'vision_extraction'
+    document_id: string | null
     provider: 'gemini'
     configured_model: string
     model_version: string | null

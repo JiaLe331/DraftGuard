@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Link, useLocation, useSearchParams } from 'react-router'
+import { useRef, useState, type ChangeEvent, type FormEvent } from 'react'
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router'
 import {
   ArrowRightIcon,
   ArrowUpRightIcon,
@@ -8,8 +8,9 @@ import {
   ClipboardTextIcon,
   TrayIcon,
   FileArrowUpIcon,
+  PlusIcon,
 } from '@phosphor-icons/react'
-import { useResource } from '../mailbox/api'
+import { request, useResource } from '../mailbox/api'
 import type { Health } from '../extraction/api'
 import { useMailbox } from '../mailbox/context'
 import {
@@ -17,9 +18,10 @@ import {
   categoryLabels,
   statusLabels,
   taskAction,
+  type SampleDetail,
   type SampleList,
 } from '../mailbox/types'
-import { Avatar, EmptyState, StatusBadge } from '../components/Primitives'
+import { Avatar, Dialog, EmptyState, StatusBadge } from '../components/Primitives'
 
 const cards = [
   {
@@ -96,7 +98,7 @@ export function Overview({ inbox = false }: { inbox?: boolean }) {
           </p>
         </div>
         {inbox ? (
-          <UploadLink from={from} />
+          <InboxActions from={from} />
         ) : (
           <div className="page-date">
             Demo mailbox<span>Provided dataset</span>
@@ -329,13 +331,150 @@ export function Overview({ inbox = false }: { inbox?: boolean }) {
   )
 }
 
-function UploadLink({ from }: { from: string }) {
+function InboxActions({ from }: { from: string }) {
   const { data } = useResource<Health>('/api/health')
-  if (!data?.capabilities?.development_extraction) return null
   return (
-    <Link className="button primary" to={`/inbox/upload?from=${encodeURIComponent(from)}`}>
-      <FileArrowUpIcon size={18} aria-hidden="true" /> Upload document
-    </Link>
+    <div className="inbox-actions">
+      {data?.capabilities?.development_tasks && <CreateTaskButton />}
+      {data?.capabilities?.development_extraction && (
+        <Link className="button" to={`/inbox/upload?from=${encodeURIComponent(from)}`}>
+          <FileArrowUpIcon size={18} aria-hidden="true" /> Upload document
+        </Link>
+      )}
+    </div>
+  )
+}
+
+type TaskDraft = { subject: string; sender: string; body: string }
+type DraftField = keyof TaskDraft
+const emptyDraft: TaskDraft = { subject: '', sender: '', body: '' }
+
+function CreateTaskButton() {
+  const navigate = useNavigate()
+  const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState(emptyDraft)
+  const [touched, setTouched] = useState<Partial<Record<DraftField, boolean>>>({})
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const refs = {
+    subject: useRef<HTMLInputElement>(null),
+    sender: useRef<HTMLInputElement>(null),
+    body: useRef<HTMLTextAreaElement>(null),
+  }
+  const limits: Record<DraftField, number> = { subject: 500, sender: 320, body: 50000 }
+  const fieldError = (field: DraftField) => {
+    const value = draft[field].trim()
+    if (!value) return 'This field is required.'
+    if (value.length > limits[field])
+      return `Use ${limits[field].toLocaleString()} characters or fewer.`
+    return ''
+  }
+  function close() {
+    if (busy) return
+    if (
+      Object.values(draft).some((value) => value.trim()) &&
+      !window.confirm('Discard this unsaved local task?')
+    )
+      return
+    setOpen(false)
+    setDraft(emptyDraft)
+    setTouched({})
+    setError('')
+  }
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    const fields: DraftField[] = ['subject', 'sender', 'body']
+    setTouched({ subject: true, sender: true, body: true })
+    const firstInvalid = fields.find((field) => fieldError(field))
+    if (firstInvalid) {
+      refs[firstInvalid].current?.focus()
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      const task = await request<SampleDetail>('/api/v1/dev/tasks/custom', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(draft),
+      })
+      setOpen(false)
+      navigate(`/tasks/${task.id}`, { state: { from: '/inbox', focusHeading: true } })
+    } catch (failure) {
+      setError((failure as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <>
+      <button className="button primary" onClick={() => setOpen(true)}>
+        <PlusIcon size={18} aria-hidden="true" /> Create local task
+      </button>
+      {open && (
+        <Dialog title="Create local task" onClose={close}>
+          <form className="create-task-form" onSubmit={(event) => void submit(event)} noValidate>
+            <p className="dialog-intro">
+              Start with the email context, then add SI and BL sources in the workspace.
+            </p>
+            {(['subject', 'sender', 'body'] as DraftField[]).map((field) => {
+              const label =
+                field === 'body' ? 'Email body' : field[0].toUpperCase() + field.slice(1)
+              const invalid = touched[field] ? fieldError(field) : ''
+              const common = {
+                id: `task-${field}`,
+                required: true,
+                maxLength: limits[field],
+                value: draft[field],
+                'aria-invalid': !!invalid,
+                'aria-describedby': `task-${field}-help${invalid ? ` task-${field}-error` : ''}`,
+                onBlur: () => setTouched((value) => ({ ...value, [field]: true })),
+                onChange: (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+                  setDraft((value) => ({ ...value, [field]: event.target.value })),
+              }
+              return (
+                <label className="form-field" htmlFor={`task-${field}`} key={field}>
+                  <span>
+                    {label} <span aria-hidden="true">*</span>
+                  </span>
+                  {field === 'body' ? (
+                    <textarea {...common} ref={refs.body} rows={7} />
+                  ) : (
+                    <input {...common} ref={refs[field]} />
+                  )}
+                  <small id={`task-${field}-help`}>
+                    {field === 'subject'
+                      ? 'Shown as the task title.'
+                      : field === 'sender'
+                        ? 'Name or email from the original message.'
+                        : 'Up to 50,000 characters; stored only in the local demo.'}
+                  </small>
+                  {invalid && (
+                    <span className="field-error" id={`task-${field}-error`} role="alert">
+                      {invalid}
+                    </span>
+                  )}
+                </label>
+              )
+            })}
+            {error && (
+              <p className="form-error" role="alert">
+                {error}
+              </p>
+            )}
+            <div className="editor-actions">
+              <button className="button" type="button" disabled={busy} onClick={close}>
+                Cancel
+              </button>
+              <button className="button primary" disabled={busy}>
+                {busy && <span className="button-spinner" aria-hidden="true" />}
+                {busy ? 'Creating task…' : 'Create task'}
+              </button>
+            </div>
+          </form>
+        </Dialog>
+      )}
+    </>
   )
 }
 
@@ -350,8 +489,8 @@ function LocalTaskList() {
     <section className="panel local-tasks">
       <div className="panel-heading">
         <div>
-          <h2>Local working copies</h2>
-          <p>Revised document checks saved on this development server.</p>
+          <h2>Recent local tasks</h2>
+          <p>Custom tasks and working copies saved on this development server.</p>
         </div>
         <button className="button compact" onClick={reload}>
           Refresh working copies

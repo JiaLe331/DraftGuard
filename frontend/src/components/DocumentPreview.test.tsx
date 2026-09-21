@@ -27,7 +27,7 @@ describe('Document preview', () => {
     expect(screen.getByRole('dialog')).toHaveAttribute('open')
     expect(screen.getByRole('link', { name: 'Download original' })).toHaveAttribute(
       'href',
-      '/api/v1/samples/email/documents/doc/content?download=true',
+      '/api/v1/records/email/documents/doc/content?download=true',
     )
     await userEvent.click(screen.getByRole('button', { name: 'Close preview' }))
     expect(close).toHaveBeenCalledOnce()

@@ -5,10 +5,13 @@ import {
   ArrowLeftIcon,
   PrinterIcon,
   ArrowClockwiseIcon,
+  CheckCircleIcon,
   FileTextIcon,
   EnvelopeSimpleIcon,
+  PencilSimpleIcon,
+  SparkleIcon,
 } from '@phosphor-icons/react'
-import { taskPath, useResource } from '../mailbox/api'
+import { request, taskPath, useResource } from '../mailbox/api'
 import { useMailbox } from '../mailbox/context'
 import { useAnalysis } from '../mailbox/useAnalysis'
 import {
@@ -17,12 +20,16 @@ import {
   fieldLabels,
   type SampleDetail,
   type FieldResult,
+  type Extraction,
+  type FieldKey,
+  type DocumentVersion,
 } from '../mailbox/types'
 import type { Health } from '../extraction/api'
 import { EmptyState, StatusBadge } from '../components/Primitives'
 import { Report } from '../components/Report'
 import { CloneTask, TaskSources, RevisionChanges } from '../components/TaskSources'
 import { DocumentPreview } from '../components/DocumentPreview'
+import { InlinePdfPage } from '../components/InlinePdfPage'
 
 export function Workspace() {
   const { taskId } = useParams()
@@ -70,7 +77,17 @@ export function Workspace() {
     )
   return (
     <TaskWorkspace
-      key={data.id + ':' + data.revision + ':' + runId + ':' + data.latest_run?.id}
+      key={
+        data.id +
+        ':' +
+        data.revision +
+        ':' +
+        runId +
+        ':' +
+        data.latest_run?.id +
+        ':' +
+        (data.current_run?.review_actions?.length ?? 0)
+      }
       task={data}
       reload={reload}
     />
@@ -89,6 +106,7 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
     savedResult,
     error,
     analyze: reanalyze,
+    replaceTask,
     busy,
   } = useAnalysis(initial, refresh)
   const [allAttachments, setAllAttachments] = useState(false)
@@ -99,7 +117,8 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
   }, [phase])
   const localTask = task.id.startsWith('task-')
   const historical = !!task.is_historical || !!params.get('run')
-  const result = task.current_run?.result
+  const machineResult = task.current_run?.result
+  const result = task.current_run?.reviewed_result ?? machineResult
   const fields = result?.fields ?? []
   const field =
     fields.find((f) => f.key === params.get('field')) ??
@@ -113,6 +132,10 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
     task.documents.find((d) => d.id === roleDocument?.id) ??
     (parsed.every((d) => !d.role) ? task.documents[0] : undefined)
   const source = parsed.find((d) => d.id === document?.id)
+  const machineField = machineResult?.fields.find((item) => item.key === field?.key)
+  const selectedRole = source?.role === 'si' || source?.role === 'bl' ? source.role : null
+  const machineExtraction = selectedRole ? machineField?.[selectedRole] : undefined
+  const effectiveExtraction = selectedRole ? field?.[selectedRole] : undefined
   const fieldEvidence = field
     ? [...field.si.evidence, ...field.bl.evidence].filter((e) => e.document_id === document?.id)
     : []
@@ -327,7 +350,10 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
       {task.latest_run?.status === 'FAILED' && (
         <div className="notice danger" role="alert">
           <div>
-            <strong>Latest analysis failed</strong>
+            <strong>
+              <span>Latest analysis failed</span>
+              {task.latest_run.error?.code ? ` · ${task.latest_run.error.code}` : ''}
+            </strong>
             <p>
               {task.latest_run.error?.message}{' '}
               {result
@@ -355,25 +381,49 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
             {task.current_run?.mode === 'precomputed'
               ? 'Precomputed · Rules'
               : task.current_run
-                ? 'On demand · Rules'
+                ? result?.provider_calls?.length
+                  ? 'On demand · Rules + AI visual candidates'
+                  : 'On demand · Rules'
                 : 'Not analyzed'}
           </span>
         </div>
         <span className="small-text">{task.current_run?.pipeline_version} · Saved locally</span>
       </div>
       <RevisionChanges task={task} />
-      {result?.review_requirements.map((problem, i) => (
-        <div className="notice warning" key={`${problem.code}-${i}`}>
+      {!!task.current_run?.review_progress?.total && (
+        <div className="notice ai-review-progress" aria-live="polite">
+          <SparkleIcon size={18} aria-hidden="true" />
           <div>
             <strong>
-              {problem.code === 'visual_extraction_required'
-                ? 'Visual extraction required'
-                : problem.code.replaceAll('_', ' ')}
+              AI visual candidates · {task.current_run.review_progress.reviewed}/
+              {task.current_run.review_progress.total} reviewed
             </strong>
-            <p>{problem.message}</p>
+            <p>
+              Confirm each candidate against its source page, or correct the extraction. A field is
+              compared only after both SI and BL values are reviewed.
+            </p>
           </div>
         </div>
-      ))}
+      )}
+      {result?.review_requirements
+        .filter(
+          (problem) =>
+            !['AI_CONFIRMATION_REQUIRED', 'AI_CANDIDATE_MISSING', 'unresolved_fields'].includes(
+              problem.code,
+            ),
+        )
+        .map((problem, i) => (
+          <div className="notice warning" key={`${problem.code}-${i}`}>
+            <div>
+              <strong>
+                {problem.code === 'visual_extraction_required'
+                  ? 'Visual extraction required'
+                  : problem.code.replaceAll('_', ' ')}
+              </strong>
+              <p>{problem.message}</p>
+            </div>
+          </div>
+        ))}
       {result && !comparison && (
         <section className="panel classification-panel">
           <h2>{task.category ? 'Email classified' : 'Needs classification review'}</h2>
@@ -430,6 +480,10 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
                       <small className="normalized-value">
                         Normalized: {f[side].normalized_value ?? 'Not established'}
                       </small>
+                      <CandidateState
+                        machine={machineResult?.fields.find((item) => item.key === f.key)?.[side]}
+                        effective={f[side]}
+                      />
                     </div>
                   ))}
                   <div role="cell">
@@ -498,11 +552,52 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
             </div>
             <div className="source-canvas">
               <div className="source-paper actual-source">
+                {document?.filename.toLowerCase().endsWith('.pdf') &&
+                  machineExtraction?.method === 'gemini_vision' && (
+                    <InlinePdfPage
+                      emailId={task.id}
+                      document={document}
+                      page={
+                        effectiveExtraction?.evidence[0]?.page ??
+                        machineExtraction.evidence[0]?.page ??
+                        1
+                      }
+                    />
+                  )}
+                {machineExtraction?.method === 'gemini_vision' && (
+                  <div className="candidate-detail">
+                    <span className="candidate-kicker">
+                      <SparkleIcon size={15} aria-hidden="true" /> AI candidate — confirm against
+                      source
+                    </span>
+                    <dl>
+                      <div>
+                        <dt>Machine value</dt>
+                        <dd>{machineExtraction.raw_value ?? 'No candidate proposed'}</dd>
+                      </div>
+                      <div>
+                        <dt>Backend normalized</dt>
+                        <dd>{machineExtraction.normalized_value ?? 'Not established'}</dd>
+                      </div>
+                      <div>
+                        <dt>Candidate page</dt>
+                        <dd>{machineExtraction.evidence[0]?.page ?? 'Not supplied'}</dd>
+                      </div>
+                    </dl>
+                  </div>
+                )}
                 {fieldEvidence.length > 0 && (
                   <div className="evidence-excerpts">
                     {fieldEvidence.map((e) => (
                       <blockquote key={e.id}>
-                        <strong>{e.locator}</strong>
+                        <strong>
+                          {e.locator} ·{' '}
+                          {e.verification_source === 'human_visual'
+                            ? 'Human visual review'
+                            : e.verification_source === 'ai_visual_candidate'
+                              ? 'Unconfirmed AI visual candidate'
+                              : 'Verified text evidence'}
+                        </strong>
                         <pre>{e.excerpt}</pre>
                       </blockquote>
                     ))}
@@ -562,6 +657,23 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
                 </strong>
               </div>
             </div>
+            {field && document && machineExtraction?.method === 'gemini_vision' && (
+              <ReviewControls
+                key={`${document.id}:${field.key}`}
+                task={task}
+                field={field.key}
+                document={document}
+                machine={machineExtraction}
+                effective={effectiveExtraction ?? machineExtraction}
+                pageCount={Math.max(1, ...(source?.units.map((unit) => unit.page ?? 1) ?? [1]))}
+                historical={historical}
+                onRefresh={reload}
+                onSaved={(next) => {
+                  replaceTask(next)
+                  refresh()
+                }}
+              />
+            )}
           </section>
         </div>
       )}
@@ -631,14 +743,35 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
               ))}
             </div>
           </details>
+          {!!task.current_run?.review_actions?.length && (
+            <details>
+              <summary>Review activity · {task.current_run.review_actions.length} actions</summary>
+              <div className="history-content">
+                {[...task.current_run.review_actions].reverse().map((action) => (
+                  <div className="history-item" key={action.id}>
+                    <span className="history-dot" />
+                    <div>
+                      <strong>
+                        {action.action === 'CORRECT_EXTRACTION' ? 'Corrected' : 'Confirmed'} ·{' '}
+                        {fieldLabels[action.field]}
+                      </strong>
+                      <p>
+                        Page {action.page} · {action.actor}
+                      </p>
+                      <small>{analyzedAt(action.created_at)}</small>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
         </section>
         <aside className="completion-panel">
           <div>
-            <h3>Analysis first. Human review next.</h3>
+            <h3>Source-backed review stays visible.</h3>
             <p>
-              These are machine results from the selected source documents. You can inspect sources
-              and rerun analysis. Human review tools are not available yet; no completion is
-              recorded.
+              AI candidates require a page-level confirmation or correction. Review actions are
+              retained locally, but this stage never records final completion.
             </p>
           </div>
         </aside>
@@ -648,6 +781,200 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
         check is not a complete bill-of-lading approval.
       </p>
       {result && <Report task={{ ...task, is_historical: historical }} />}
+    </div>
+  )
+}
+
+function CandidateState({ machine, effective }: { machine?: Extraction; effective: Extraction }) {
+  if (machine?.method !== 'gemini_vision') return null
+  if (effective.review?.action === 'CORRECT_EXTRACTION')
+    return (
+      <span className="candidate-state reviewed">
+        <PencilSimpleIcon size={14} aria-hidden="true" /> Corrected
+      </span>
+    )
+  if (effective.review?.action === 'CONFIRM_CANDIDATE')
+    return (
+      <span className="candidate-state reviewed">
+        <CheckCircleIcon size={14} aria-hidden="true" /> Confirmed
+      </span>
+    )
+  return (
+    <span className="candidate-state pending">
+      <SparkleIcon size={14} aria-hidden="true" /> AI candidate · Confirmation required
+    </span>
+  )
+}
+
+function ReviewControls({
+  task,
+  field,
+  document,
+  machine,
+  effective,
+  pageCount,
+  historical,
+  onRefresh,
+  onSaved,
+}: {
+  task: SampleDetail
+  field: FieldKey
+  document: DocumentVersion
+  machine: Extraction
+  effective: Extraction
+  pageCount: number
+  historical: boolean
+  onRefresh: () => void
+  onSaved: (task: SampleDetail) => void
+}) {
+  const candidatePage = machine.evidence[0]?.page ?? 1
+  const [editing, setEditing] = useState(false)
+  const [rawValue, setRawValue] = useState(machine.raw_value ?? '')
+  const [page, setPage] = useState(candidatePage)
+  const [busyAction, setBusyAction] = useState<'confirm' | 'correct' | null>(null)
+  const [error, setError] = useState('')
+  const [saved, setSaved] = useState('')
+
+  async function save(action: 'CONFIRM_CANDIDATE' | 'CORRECT_EXTRACTION') {
+    const runId = task.current_run?.id
+    if (!runId || busyAction) return
+    setError('')
+    setSaved('')
+    setBusyAction(action === 'CONFIRM_CANDIDATE' ? 'confirm' : 'correct')
+    try {
+      const next = await request<SampleDetail>(`${taskPath(task.id)}/reviews`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          expected_revision: task.revision,
+          run_id: runId,
+          document_id: document.id,
+          field,
+          action,
+          raw_value: action === 'CORRECT_EXTRACTION' ? rawValue : undefined,
+          evidence: { page: action === 'CONFIRM_CANDIDATE' ? candidatePage : page },
+        }),
+      })
+      onSaved(next)
+      setEditing(false)
+      setSaved(action === 'CONFIRM_CANDIDATE' ? 'Candidate confirmed.' : 'Correction saved.')
+    } catch (failure) {
+      setError((failure as Error).message)
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  if (historical)
+    return (
+      <div className="evidence-actions">
+        <p className="notice warning">Historical review actions are read only.</p>
+      </div>
+    )
+
+  return (
+    <div className="evidence-actions">
+      {effective.review && (
+        <p className="review-attribution">
+          Latest action:{' '}
+          {effective.review.action === 'CORRECT_EXTRACTION' ? 'Corrected' : 'Confirmed'}
+          {' · '}
+          {effective.review.actor}
+        </p>
+      )}
+      <div className="paired-actions">
+        <button
+          className="button primary"
+          disabled={!machine.raw_value || !!busyAction}
+          onClick={() => void save('CONFIRM_CANDIDATE')}
+        >
+          <CheckCircleIcon size={16} aria-hidden="true" />
+          {busyAction === 'confirm' ? 'Confirming…' : 'Confirm candidate'}
+        </button>
+        <button
+          className="button"
+          disabled={!!busyAction}
+          aria-expanded={editing}
+          onClick={() => {
+            setEditing((value) => !value)
+            setError('')
+          }}
+        >
+          <PencilSimpleIcon size={16} aria-hidden="true" /> Correct extraction
+        </button>
+      </div>
+      {!machine.raw_value && (
+        <p className="candidate-help">
+          No candidate can be confirmed. Correct the extraction only if the value is visible in the
+          source.
+        </p>
+      )}
+      {editing && (
+        <form
+          className="review-editor"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void save('CORRECT_EXTRACTION')
+          }}
+        >
+          <div className="editor-heading">
+            <div>
+              <div className="eyebrow">SOURCE-BACKED CORRECTION</div>
+              <h3>Correct extraction</h3>
+            </div>
+          </div>
+          <label className="form-field">
+            Value visible in the source
+            <textarea
+              required
+              rows={3}
+              maxLength={5000}
+              value={rawValue}
+              onChange={(event) => setRawValue(event.target.value)}
+            />
+          </label>
+          <label className="form-field">
+            Evidence page
+            <input
+              required
+              type="number"
+              min={1}
+              max={pageCount}
+              value={page}
+              onChange={(event) => setPage(event.currentTarget.valueAsNumber)}
+            />
+          </label>
+          {error && <ReviewError message={error} onRefresh={onRefresh} />}
+          <div className="editor-actions">
+            <button
+              type="button"
+              className="button"
+              disabled={!!busyAction}
+              onClick={() => setEditing(false)}
+            >
+              Cancel
+            </button>
+            <button className="button primary" disabled={!!busyAction || !rawValue.trim()}>
+              {busyAction === 'correct' ? 'Saving correction…' : 'Save correction'}
+            </button>
+          </div>
+        </form>
+      )}
+      {!editing && error && <ReviewError message={error} onRefresh={onRefresh} />}
+      <p className="review-announcement" aria-live="polite">
+        {saved}
+      </p>
+    </div>
+  )
+}
+
+function ReviewError({ message, onRefresh }: { message: string; onRefresh: () => void }) {
+  return (
+    <div className="form-error" role="alert">
+      <span>{message}</span>
+      <button type="button" className="text-button" onClick={onRefresh}>
+        Refresh task
+      </button>
     </div>
   )
 }

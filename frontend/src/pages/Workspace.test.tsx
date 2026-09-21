@@ -23,7 +23,7 @@ function sample(): SampleDetail {
       raw_value: role === 'si' ? 'SOURCE LTD' : 'OTHER LTD',
       normalized_value: role === 'si' ? 'SOURCE LTD' : 'OTHER LTD',
       value_state: 'PRESENT' as const,
-      method: 'rule',
+      method: 'rule' as const,
       requires_human_confirmation: false,
       reason: 'whitespace_and_case',
       evidence: [evidence(role)],
@@ -430,6 +430,64 @@ function localTask(): SampleDetail {
     current_bl_id: 'bl',
   }
 }
+function visualTask(): SampleDetail {
+  const task = structuredClone(localTask())
+  task.workflow_state = 'REVIEW_REQUIRED'
+  task.known_defect_fields = []
+  task.coverage = { checked: 0, total: 7 }
+  const machine = task.current_run!.result!
+  machine.workflow_state = 'REVIEW_REQUIRED'
+  machine.known_defect_fields = []
+  machine.coverage = { checked: 0, total: 7 }
+  machine.provider_calls = [
+    {
+      provider: 'gemini',
+      configured_model: 'fake-model',
+      model_version: 'fake-v1',
+      response_id: 'fake-response',
+      prompt_version: 'scan-seven-fields-v1',
+      duration_ms: 12,
+      usage: null,
+      cost_usd: null,
+    },
+  ]
+  machine.review_requirements = machine.fields.flatMap((item) =>
+    (['si', 'bl'] as const).map((role) => ({
+      code: 'AI_CONFIRMATION_REQUIRED',
+      message: 'Confirm the visual candidate.',
+      document_id: role,
+      field: item.key,
+    })),
+  )
+  for (const item of machine.fields) {
+    item.finding = 'NEEDS_REVIEW'
+    for (const role of ['si', 'bl'] as const) {
+      item[role] = {
+        ...item[role],
+        method: 'gemini_vision',
+        requires_human_confirmation: true,
+        reason: 'AI_CONFIRMATION_REQUIRED',
+        evidence: item[role].evidence.map((evidence) => ({
+          ...evidence,
+          verified: false,
+          verification_source: 'ai_visual_candidate',
+        })),
+      }
+    }
+  }
+  for (const document of machine.documents) document.state = 'VISUAL_CANDIDATES'
+  task.current_run!.reviewed_result = structuredClone(machine)
+  task.current_run!.review_actions = []
+  task.current_run!.review_progress = {
+    total: 14,
+    reviewed: 0,
+    confirmed: 0,
+    corrected: 0,
+    pending: 14,
+  }
+  task.latest_run = task.current_run
+  return task
+}
 function taskApi(task = localTask()) {
   return vi.fn(async (url: string, options?: RequestInit) => {
     if (url === '/api/health')
@@ -443,6 +501,122 @@ function taskApi(task = localTask()) {
 }
 
 describe('local task revision journeys', () => {
+  it('shows visual candidates, source review controls, busy state and persisted confirmation', async () => {
+    const task = visualTask()
+    let release!: () => void
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let submitted: Record<string, unknown> | undefined
+    const fetcher = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url.includes('/documents/') && url.includes('/content')) {
+        return new Response(new Uint8Array([1]), { status: 200 })
+      }
+      if (url.endsWith('/reviews') && options?.method === 'POST') {
+        submitted = JSON.parse(options.body as string)
+        await waiting
+        const next = structuredClone(task)
+        const action = {
+          id: 'review-1',
+          task_id: next.id,
+          revision: 1,
+          run_id: 'run-1',
+          document_id: 'bl',
+          field: 'shipper' as const,
+          action: 'CONFIRM_CANDIDATE' as const,
+          machine_raw_value: 'OTHER LTD',
+          raw_value: 'OTHER LTD',
+          normalized_value: 'OTHER LTD',
+          page: 1,
+          unit_id: 'u1',
+          actor: 'Demo reviewer — unverified',
+          created_at: '2026-09-20T00:00:02Z',
+        }
+        next.current_run!.review_actions = [action]
+        next.current_run!.review_progress = {
+          total: 14,
+          reviewed: 1,
+          confirmed: 1,
+          corrected: 0,
+          pending: 13,
+        }
+        const extraction = next.current_run!.reviewed_result!.fields[0].bl
+        extraction.requires_human_confirmation = false
+        extraction.review = action
+        return json(next)
+      }
+      return taskApi(task)(url, options)
+    })
+    vi.stubGlobal('fetch', fetcher)
+    const user = userEvent.setup()
+    renderRoute('/tasks/task-copy')
+
+    expect(await screen.findByText('AI visual candidates · 0/14 reviewed')).toBeInTheDocument()
+    expect(screen.getAllByText(/AI candidate · Confirmation required/)).toHaveLength(14)
+    await user.click(screen.getByRole('button', { name: 'Inspect BL Shipper' }))
+    expect(screen.getByRole('region', { name: 'Source evidence' })).toHaveFocus()
+    expect(screen.getByText('AI candidate — confirm against source')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Confirm candidate' }))
+    expect(screen.getByRole('button', { name: 'Confirming…' })).toBeDisabled()
+    expect(submitted).toMatchObject({
+      expected_revision: 1,
+      run_id: 'run-1',
+      document_id: 'bl',
+      field: 'shipper',
+      action: 'CONFIRM_CANDIDATE',
+      evidence: { page: 1 },
+    })
+    release()
+    expect((await screen.findAllByText('Confirmed')).length).toBeGreaterThan(0)
+    expect(screen.getByText('Candidate confirmed.')).toBeInTheDocument()
+  })
+
+  it('shows a correction form and keeps a rejected review error beside it', async () => {
+    const task = visualTask()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, options?: RequestInit) => {
+        if (url.includes('/documents/') && url.includes('/content')) {
+          return new Response(new Uint8Array([1]), { status: 200 })
+        }
+        if (url.endsWith('/reviews') && options?.method === 'POST') {
+          return json({ detail: { message: 'The sources changed. Refresh before saving.' } }, 409)
+        }
+        return taskApi(task)(url, options)
+      }),
+    )
+    const user = userEvent.setup()
+    renderRoute('/tasks/task-copy')
+    await user.click(await screen.findByRole('button', { name: 'Correct extraction' }))
+    const value = screen.getByLabelText('Value visible in the source')
+    await user.clear(value)
+    await user.type(value, 'Corrected shipper')
+    await user.click(screen.getByRole('button', { name: 'Save correction' }))
+    expect(
+      await screen.findByText('The sources changed. Refresh before saving.'),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Refresh task' })).toBeInTheDocument()
+  })
+
+  it('keeps visual review controls read only in historical results', async () => {
+    const task = visualTask()
+    task.is_historical = true
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, options?: RequestInit) => {
+        if (url.includes('/documents/') && url.includes('/content')) {
+          return new Response(new Uint8Array([1]), { status: 200 })
+        }
+        return taskApi(task)(url, options)
+      }),
+    )
+    renderRoute('/tasks/task-copy?run=run-1')
+    expect(await screen.findByText('Historical review actions are read only.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Confirm candidate' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Correct extraction' })).not.toBeInTheDocument()
+  })
+
   it('clones a baseline and lists working copies even when standalone extraction is disabled', async () => {
     const fetcher = taskApi()
     vi.stubGlobal('fetch', fetcher)

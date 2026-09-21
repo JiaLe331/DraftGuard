@@ -103,12 +103,18 @@ export function useAnalysis(initial: SampleDetail, refresh: () => void) {
       locked.current = false
     }
   }
+  function replaceTask(next: SampleDetail) {
+    clearTimeout(timer.current)
+    pending.current = null
+    setTask(next)
+  }
   return {
     task,
     phase,
     error,
     savedResult,
     analyze,
+    replaceTask,
     reveal,
     busy: phase === 'running' || phase === 'preparing',
   }

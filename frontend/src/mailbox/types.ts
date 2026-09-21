@@ -73,15 +73,33 @@ export interface SourceUnit {
 export interface Evidence extends SourceUnit {
   excerpt: string
   verified: boolean
+  verification_source?: 'source_text' | 'ai_visual_candidate' | 'human_visual'
+}
+export interface ReviewAction {
+  id: string
+  task_id: string
+  revision: number
+  run_id: string
+  document_id: string
+  field: FieldKey
+  action: 'CONFIRM_CANDIDATE' | 'CORRECT_EXTRACTION'
+  machine_raw_value: string | null
+  raw_value: string
+  normalized_value: string | null
+  page: number
+  unit_id: string
+  actor: string
+  created_at: string
 }
 export interface Extraction {
   raw_value: string | null
   normalized_value: string | null
   value_state: 'PRESENT' | 'MISSING' | 'UNREADABLE' | 'AMBIGUOUS'
-  method: string
+  method: 'rule' | 'gemini_text' | 'gemini_vision' | 'human'
   requires_human_confirmation: boolean
   reason: string
   evidence: Evidence[]
+  review?: ReviewAction
 }
 export interface FieldResult {
   key: FieldKey
@@ -93,6 +111,9 @@ export interface Problem {
   code: string
   message: string
   document_id?: string
+  field?: FieldKey
+  retryable?: boolean
+  next_action?: string
 }
 export interface ParsedDocument {
   id: string
@@ -126,6 +147,16 @@ export interface Result {
   coverage: { checked: number; total: number }
   workflow_state: Workflow
   processing_status: string
+  provider_calls?: Array<{
+    provider: 'gemini'
+    configured_model: string
+    model_version: string | null
+    response_id: string | null
+    prompt_version: string
+    duration_ms: number
+    usage: Record<string, number | null> | null
+    cost_usd: number | null
+  }>
 }
 export interface RunSummary {
   audit_run_id?: string | null
@@ -139,6 +170,15 @@ export interface RunSummary {
 }
 export interface Run extends RunSummary {
   result: Result | null
+  reviewed_result?: Result | null
+  review_actions?: ReviewAction[]
+  review_progress?: {
+    total: number
+    reviewed: number
+    confirmed: number
+    corrected: number
+    pending: number
+  }
   error: Problem | null
   document_ids: string[]
 }

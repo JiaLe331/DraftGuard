@@ -1,8 +1,163 @@
 # DraftGuard
 
-DraftGuard turns the organizer's shipping-document dataset into a local demo mailbox. It imports original email JSON and attachments, runs rule-first classification and seven-field SI / draft-BL comparison, uses server-side Gemini only for ambiguous classification, bounded readable-text fallback, or image-only PDFs, and saves machine results plus human review overlays in SQLite. Overview, Inbox, and the verification workspace use the backend API; no personal Gmail account is connected.
+DraftGuard reads a shipping-operations inbox, finds the messages that ask for a
+document check, and compares the Shipping Instruction against the draft Bill of
+Lading across seven fields — shipper, consignee, notify party, port of loading,
+port of discharge, container count and gross weight. Every value it reports is
+bound to the line, page, cell or table row it came from, and a difference it
+cannot decide is escalated to a person instead of guessed.
 
-This is a **localhost-first development milestone**. Organizer samples are read only; create a working copy or a blank local task before analysis or review. Gemini paths are available only when both server-side settings are supplied. Local tasks support rule/text/visual source-backed correction, visual confirmation, externally supplied information with provenance, reviewer-controlled copy-only amendment drafts, exact-run completion acknowledgment, and reviewed current/historical reports. Cloud persistence, session ownership, and public deployment are intentionally deferred. `CHECK_COMPLETE` means the bounded seven-field check was acknowledged; it is not legal or cargo-release approval.
+Deterministic rules own normalisation, comparison and every match decision.
+Gemini is used only where a rule cannot reach: intent that subject-line patterns
+cannot settle, documents whose labels the extractor has never seen, image-only
+scans with no text layer, and plain-English commentary on differences the rules
+have already confirmed. A value the model proposes is accepted only when it
+quotes a line the backend can find in that same source.
+
+`CHECK_COMPLETE` means the bounded seven-field check was acknowledged by a
+reviewer. It is not legal approval, customs clearance, or authority to release
+cargo.
+
+## Live demo
+
+The deployed application and API URLs are given to the judges through the
+submission form rather than published here. The demo runs on a metered Gemini
+key, and an address in a public repository invites drive-by traffic that would
+exhaust the quota the judges need.
+
+The deployed instance carries a baked demo store: the provided 520-email
+mailbox, a reviewed image-only scan, and a draft that was corrected twice. Every
+visitor starts from that same state. Reviews, uploads and completions persist
+for the life of the container instance and reset when it restarts — a scope
+decision for a demo, not durable persistence.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph browser["Browser"]
+        UI["React · TypeScript · Vite<br/>landing · inbox · verification workspace"]
+    end
+
+    subgraph vercel["Vercel"]
+        STATIC["Static build<br/>SPA rewrites · immutable assets"]
+    end
+
+    subgraph run["Google Cloud Run · single instance"]
+        API["FastAPI · 30 routes"]
+        RULES["Deterministic core<br/>parsers · label normaliser · comparator"]
+        AI["Gemini adapters<br/>classification · text · vision · wording · risk"]
+        DB[("SQLite<br/>tasks · versions · runs<br/>review events · completions")]
+        FILES[("Source objects<br/>original bytes + SHA-256")]
+    end
+
+    GEM["Gemini API<br/>server-side key"]
+
+    UI -->|"HTTPS · CORS allow-list"| STATIC
+    UI -->|"JSON"| API
+    API --> RULES
+    RULES -->|"only when a rule cannot decide"| AI
+    AI --> GEM
+    RULES --> DB
+    RULES --> FILES
+    API --> DB
+```
+
+The frontend is a static build; it holds no key and talks to one API origin.
+The API runs as a **single** Cloud Run instance on purpose: the store is SQLite
+inside the container, so a second instance would serve a second, diverging copy.
+
+## How a check runs
+
+```mermaid
+flowchart TD
+    EMAIL["Email + attachments"] --> CLS{"Rules classify<br/>the intent"}
+    CLS -->|"clear"| CAT["One of five categories"]
+    CLS -->|"ambiguous or conflicting"| GCLS["Gemini classifies"]
+    GCLS --> CAT
+    CAT -->|"not a document check"| STOP["Classified only.<br/>No comparison."]
+    CAT -->|"BL_COMPARISON"| READ["Read both sources<br/>TXT · PDF · DOCX · XLSX"]
+
+    READ --> GATE{"Readable? Right type?<br/>Both present?"}
+    GATE -->|"no text layer"| VIS["Gemini reads the page image<br/>candidates stay unconfirmed"]
+    GATE -->|"wrong doc · missing · corrupt"| ESC["Escalate with the reason"]
+    GATE -->|"yes"| EXTRACT["Rules locate the seven fields"]
+
+    EXTRACT --> FOUND{"Every field located?"}
+    FOUND -->|"labels the rules do not know"| GTXT["Gemini proposes values<br/>each must quote its source"]
+    GTXT --> VERIFY{"Quote found in<br/>that same source?"}
+    VERIFY -->|"no"| ESC
+    VERIFY -->|"yes"| NORM["Normalise<br/>party names · ports · counts · weights"]
+    FOUND -->|"yes"| NORM
+    VIS --> HUMAN
+
+    NORM --> CMP{"Compare the<br/>normalised pair"}
+    CMP -->|"both present, equal"| MATCH["Match"]
+    CMP -->|"both present, different"| MIS["Discrepancy"]
+    CMP -->|"blank · unreadable · uncertain"| ESC
+
+    ESC --> HUMAN["Human review<br/>confirm · correct · supply with provenance"]
+    HUMAN --> RESULT["Reviewed result"]
+    MATCH --> RESULT
+    MIS --> RESULT
+    RESULT --> DONE{"Seven fields covered,<br/>nothing unresolved?"}
+    DONE -->|"no"| BLOCK["Completion blocked"]
+    DONE -->|"yes"| ACK["Reviewer acknowledges<br/>CHECK_COMPLETE for this exact run"]
+```
+
+A blank field is not a discrepancy. Neither is a document the extractor could
+not read. Both are uncertainty, and both are escalated rather than decided.
+
+## What the reviewer does
+
+```mermaid
+sequenceDiagram
+    actor R as Reviewer
+    participant W as Workspace
+    participant A as API
+    participant G as Gemini
+
+    R->>W: Open an inbox email
+    R->>W: Start review
+    W->>A: Copy the sources into a review workspace
+    A-->>W: Seven fields, each with its source evidence
+
+    R->>W: Click a value
+    W-->>R: The exact line, page, cell or table row it came from
+
+    opt Differences were found
+        R->>W: Explain with Gemini
+        W->>A: Only the fields the comparison already decided
+        A->>G: What does each difference cost downstream?
+        G-->>R: Advisory notes — stored nowhere, decide nothing
+    end
+
+    R->>W: Upload the corrected draft
+    W->>A: New revision
+    A-->>R: Resolved · Persisting · New discrepancies
+    Note over R,A: A fix that introduces a new fault is caught here
+
+    R->>W: Complete the seven-field check
+    A-->>R: Acknowledged against this exact revision and run
+```
+
+Revisions are immutable and every review action is append-only, so a completed
+check always names the exact sources it was made against.
+
+## What the deterministic core handles
+
+These are the presentation differences the comparator resolves before it decides
+anything, each one drawn from the provided dataset:
+
+| Case | Shipping Instruction | Draft Bill of Lading | Outcome |
+|---|---|---|---|
+| Label synonyms | `Port of Loading (POL)` | `Load Port` | same field |
+| UN/LOCODE present on one side | `NHAVA SHEVA, INDIA` | `NHAVA SHEVA, INDIA (INNSA)` | match |
+| Address block under a party | name + address lines | name only | compared on the named party |
+| Spreadsheet number, unit in the label | `243588` | `243,588` | match |
+| Container expression | `6 x 40'HC` | `6` | match |
+| Placeholder fill | `____MT`, `???`, `TBA` | a real value | missing, not a discrepancy |
+| Labels never seen before | `Box Tally` | `Equipment Quantity` | Gemini, with a verified quote |
 
 ## Requirements and installation
 

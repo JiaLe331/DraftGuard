@@ -34,6 +34,12 @@ This writes `backend/demo-store/` (about 4.5 MiB) and prints the row counts it
 captured. Re-run it whenever you want the deployed baseline to match a newer
 local state, then redeploy.
 
+`demo-store/` is generated, not committed: it is a copy of a local store and
+would otherwise put several megabytes of SQLite into every clone. It is ignored
+by Git and deliberately *not* ignored by `.gcloudignore`, so Cloud Build still
+uploads it. Run this step before your first deploy, or the image build fails at
+`COPY demo-store`.
+
 ## 2. Deploy the API to Cloud Run
 
 One-time setup:

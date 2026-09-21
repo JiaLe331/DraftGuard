@@ -23,3 +23,7 @@ coverage/
 
 # Local mailbox, source snapshots, and SQLite results
 /backend/.local/
+
+# Image payload baked from the local store by scripts/build_demo_store.py.
+# Generated before a deploy rather than carried in the repository.
+/backend/demo-store/

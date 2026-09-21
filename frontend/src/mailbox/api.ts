@@ -4,10 +4,20 @@ export const apiBase = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, 
 export class ApiError extends Error {
   status: number
   blockers?: Array<{ code: string; message: string }>
-  constructor(message: string, status = 0, blockers?: Array<{ code: string; message: string }>) {
+  code?: string
+  retryable?: boolean
+  constructor(
+    message: string,
+    status = 0,
+    blockers?: Array<{ code: string; message: string }>,
+    code?: string,
+    retryable?: boolean,
+  ) {
     super(message)
     this.status = status
     this.blockers = blockers
+    this.code = code
+    this.retryable = retryable
   }
 }
 export async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -27,6 +37,8 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
             : `Request failed (${response.status}).`),
         response.status,
         body?.detail?.blockers,
+        body?.detail?.code ?? body?.error?.code,
+        body?.detail?.retryable ?? body?.error?.retryable,
       )
     }
     return (await response.json()) as T

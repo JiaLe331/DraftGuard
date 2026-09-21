@@ -159,7 +159,7 @@ export interface Result {
   workflow_state: Workflow
   processing_status: string
   provider_calls?: Array<{
-    operation: 'email_classification' | 'text_extraction' | 'vision_extraction'
+    operation: 'email_classification' | 'text_extraction' | 'vision_extraction' | 'amendment_email'
     document_id: string | null
     provider: 'gemini'
     configured_model: string
@@ -170,6 +170,41 @@ export interface Result {
     usage: Record<string, number | null> | null
     cost_usd: number | null
   }>
+}
+export type AmendmentIssueKind =
+  | 'mismatch'
+  | 'missing_value'
+  | 'unreadable'
+  | 'ambiguous'
+  | 'supplied_information'
+  | 'pending_review'
+  | 'document_requirement'
+export interface AmendmentIssue {
+  id: string
+  field: FieldKey | null
+  field_label: string
+  kind: AmendmentIssueKind
+  source_role: 'si' | 'bl' | null
+  si_value: string | null
+  bl_value: string | null
+  summary: string
+  requested_action: string
+}
+export interface AmendmentDraft {
+  id: string
+  task_id: string
+  revision: number
+  run_id: string
+  recipient: string
+  subject: string
+  opening: string
+  closing: string
+  issue_items: AmendmentIssue[]
+  generation_method: 'gemini' | 'standard'
+  provider_call: NonNullable<Result['provider_calls']>[number] | null
+  user_edited: boolean
+  created_at: string
+  updated_at: string
 }
 export interface RunSummary {
   audit_run_id?: string | null
@@ -218,6 +253,7 @@ export interface SampleDetail extends Sample {
   current_run: Run | null
   latest_run: Run | null
   runs: RunSummary[]
+  amendment_draft?: AmendmentDraft | null
 }
 export function analyzedAt(value: string | null) {
   return value

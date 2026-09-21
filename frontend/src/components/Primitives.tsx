@@ -57,10 +57,12 @@ export function Dialog({
   title,
   children,
   onClose,
+  wide = false,
 }: {
   title: string
   children: ReactNode
   onClose: () => void
+  wide?: boolean
 }) {
   const ref = useRef<HTMLDialogElement>(null)
   useEffect(() => {
@@ -71,7 +73,7 @@ export function Dialog({
   return (
     <dialog
       ref={ref}
-      className="dialog"
+      className={`dialog ${wide ? 'dialog-wide' : ''}`}
       aria-labelledby="dialog-title"
       onCancel={(event) => {
         event.preventDefault()

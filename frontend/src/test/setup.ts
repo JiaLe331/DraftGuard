@@ -6,6 +6,7 @@ afterEach(() => {
   localStorage.clear()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+  Reflect.deleteProperty(window.navigator, 'clipboard')
 })
 HTMLDialogElement.prototype.showModal = function () {
   this.setAttribute('open', '')

@@ -33,6 +33,7 @@ import { Report } from '../components/Report'
 import { CloneTask, TaskSources, RevisionChanges } from '../components/TaskSources'
 import { DocumentPreview } from '../components/DocumentPreview'
 import { InlinePdfPage } from '../components/InlinePdfPage'
+import { AmendmentEmail } from '../components/AmendmentEmail'
 
 export function Workspace() {
   const { taskId } = useParams()
@@ -89,7 +90,9 @@ export function Workspace() {
         ':' +
         data.latest_run?.id +
         ':' +
-        (data.current_run?.review_actions?.length ?? 0)
+        (data.current_run?.review_actions?.length ?? 0) +
+        ':' +
+        (data.amendment_draft?.updated_at ?? '')
       }
       task={data}
       reload={reload}
@@ -766,6 +769,15 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
           </select>
         </label>
       )}
+      <AmendmentEmail
+        task={task}
+        historical={historical}
+        disabled={processing}
+        onSaved={(next) => {
+          replaceTask(next)
+          refresh()
+        }}
+      />
       <div className="workspace-bottom">
         <section className="panel review-history">
           <details>

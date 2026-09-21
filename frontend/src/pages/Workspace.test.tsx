@@ -3,7 +3,13 @@ import userEvent from '@testing-library/user-event'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
 import { MailboxProvider } from '../mailbox/provider'
-import { fieldLabels, type SampleDetail, type SampleList, type SourceUnit } from '../mailbox/types'
+import {
+  fieldLabels,
+  type AmendmentDraft,
+  type SampleDetail,
+  type SampleList,
+  type SourceUnit,
+} from '../mailbox/types'
 import { Shell } from '../components/Shell'
 import { Overview } from './Overview'
 import { Workspace } from './Workspace'
@@ -441,6 +447,61 @@ function localTask(): SampleDetail {
     current_bl_id: 'bl',
   }
 }
+function amendmentDraft(method: 'gemini' | 'standard' = 'gemini'): AmendmentDraft {
+  return {
+    id: 'draft-1',
+    task_id: 'task-copy',
+    revision: 1,
+    run_id: 'run-1',
+    recipient: 'sender@example.test',
+    subject: 'Please revise the draft BL',
+    opening: 'Hello,\n\nPlease address the items below.',
+    closing: 'Thank you. Please send the revised documents.',
+    issue_items: [
+      {
+        id: 'consignee:mismatch',
+        field: 'consignee',
+        field_label: 'Consignee',
+        kind: 'mismatch',
+        source_role: 'bl',
+        si_value: 'SOURCE LTD',
+        bl_value: 'OTHER LTD',
+        summary: 'Consignee differs between the SI and draft BL.',
+        requested_action: 'Revise the draft BL to match the confirmed SI value.',
+      },
+      {
+        id: 'notify_party:mismatch',
+        field: 'notify_party',
+        field_label: 'Notify party',
+        kind: 'mismatch',
+        source_role: 'bl',
+        si_value: 'SOURCE LTD',
+        bl_value: 'OTHER LTD',
+        summary: 'Notify party differs between the SI and draft BL.',
+        requested_action: 'Revise the draft BL to match the confirmed SI value.',
+      },
+    ],
+    generation_method: method,
+    provider_call:
+      method === 'gemini'
+        ? {
+            operation: 'amendment_email',
+            document_id: null,
+            provider: 'gemini',
+            configured_model: 'fake-model',
+            model_version: 'fake-v1',
+            response_id: 'response-1',
+            prompt_version: 'amendment-email-wording-v1',
+            duration_ms: 8,
+            usage: { total_token_count: 20 },
+            cost_usd: null,
+          }
+        : null,
+    user_edited: false,
+    created_at: '2026-09-21T00:00:00Z',
+    updated_at: '2026-09-21T00:00:00Z',
+  }
+}
 function visualTask(): SampleDetail {
   const task = structuredClone(localTask())
   task.workflow_state = 'REVIEW_REQUIRED'
@@ -758,6 +819,7 @@ describe('local task revision journeys', () => {
         (_, element) => element?.tagName === 'P' && !!element.textContent?.includes('Run run-1'),
       ).length,
     ).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: /amendment email/i })).not.toBeInTheDocument()
     expect(
       screen.queryByRole('button', { name: 'Complete seven-field check' }),
     ).not.toBeInTheDocument()
@@ -983,9 +1045,160 @@ describe('local task revision journeys', () => {
     expect(screen.queryByLabelText('Revised document')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Reanalyze' })).not.toBeInTheDocument()
     expect(screen.getAllByText('Consignee, Notify party').length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: /amendment email/i })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Print report' }))
     expect(screen.getByText('Historical result · Not the current check')).toBeInTheDocument()
     expect(screen.getByText(/Generated .*Source revision 1/)).toBeInTheDocument()
     expect(screen.queryByText(/newer-source/)).not.toBeInTheDocument()
+  })
+
+  it('generates, edits, saves and copies an evidence-locked amendment email', async () => {
+    let task = localTask()
+    let savedPayload: Record<string, unknown> | undefined
+    const copied = vi.fn().mockResolvedValue(undefined)
+    const fetcher = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url.endsWith('/amendment-draft') && options?.method === 'POST') {
+        expect(JSON.parse(options.body as string)).toEqual({
+          expected_revision: 1,
+          run_id: 'run-1',
+          method: 'gemini',
+        })
+        task = { ...task, amendment_draft: amendmentDraft() }
+        return json(task)
+      }
+      if (url.includes('/amendment-draft/draft-1') && options?.method === 'PUT') {
+        savedPayload = JSON.parse(options.body as string)
+        task = {
+          ...task,
+          amendment_draft: {
+            ...amendmentDraft(),
+            ...savedPayload,
+            user_edited: true,
+            updated_at: '2026-09-21T00:01:00Z',
+          },
+        }
+        return json(task)
+      }
+      return taskApi(task)(url, options)
+    })
+    vi.stubGlobal('fetch', fetcher)
+    const user = userEvent.setup()
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: copied },
+    })
+    renderRoute('/tasks/task-copy')
+
+    await user.click(await screen.findByRole('button', { name: 'Draft amendment email' }))
+    const emptyDialog = screen.getByRole('dialog', { name: 'Draft amendment email' })
+    expect(within(emptyDialog).getByText(/stays under DraftGuard’s control/i)).toBeInTheDocument()
+    await user.click(within(emptyDialog).getByRole('button', { name: 'Generate with Gemini' }))
+
+    expect(await screen.findByText('AI-polished')).toBeInTheDocument()
+    const locked = screen.getByRole('region', { name: 'Items requiring action · 2' })
+    expect(within(locked).getByText('Consignee')).toBeInTheDocument()
+    expect(within(locked).getAllByText('SOURCE LTD')).toHaveLength(2)
+    expect(within(locked).queryByRole('textbox')).not.toBeInTheDocument()
+
+    const recipient = screen.getByLabelText('Recipient')
+    await user.clear(recipient)
+    await user.type(recipient, 'carrier@example.test')
+    await user.clear(screen.getByLabelText('Subject'))
+    await user.type(screen.getByLabelText('Subject'), 'Draft BL corrections required')
+    await user.click(screen.getByRole('button', { name: 'Copy email' }))
+
+    expect(savedPayload).toMatchObject({
+      expected_revision: 1,
+      run_id: 'run-1',
+      recipient: 'carrier@example.test',
+      subject: 'Draft BL corrections required',
+    })
+    await waitFor(() => expect(copied).toHaveBeenCalledOnce())
+    expect(copied.mock.calls[0][0]).toContain('To: carrier@example.test')
+    expect(copied.mock.calls[0][0]).toContain('1. Consignee')
+    expect(await screen.findByText('Email copied to clipboard.')).toBeInTheDocument()
+  })
+
+  it('shows explicit Gemini recovery and labels a chosen standard draft', async () => {
+    let task = localTask()
+    const fetcher = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url.endsWith('/amendment-draft') && options?.method === 'POST') {
+        const body = JSON.parse(options.body as string)
+        if (body.method === 'gemini')
+          return json(
+            {
+              detail: {
+                code: 'AI_NOT_CONFIGURED',
+                message: 'Gemini amendment email wording is not configured.',
+                retryable: false,
+              },
+            },
+            503,
+          )
+        task = { ...task, amendment_draft: amendmentDraft('standard') }
+        return json(task)
+      }
+      return taskApi(task)(url, options)
+    })
+    vi.stubGlobal('fetch', fetcher)
+    const user = userEvent.setup()
+    renderRoute('/tasks/task-copy')
+
+    await user.click(await screen.findByRole('button', { name: 'Draft amendment email' }))
+    await user.click(screen.getByRole('button', { name: 'Generate with Gemini' }))
+    expect(await screen.findByText(/AI_NOT_CONFIGURED/)).toBeInTheDocument()
+    expect(
+      screen.getByText(/cannot be retried until its configuration changes/i),
+    ).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Generate standard draft' }))
+    expect(await screen.findByText('Standard template')).toBeInTheDocument()
+    expect(screen.getByText('Standard draft saved locally.')).toBeInTheDocument()
+  })
+
+  it('confirms regeneration and preserves manual copy recovery when clipboard fails', async () => {
+    const task = { ...localTask(), amendment_draft: amendmentDraft() }
+    const clipboard = vi.fn().mockRejectedValue(new Error('denied'))
+    vi.stubGlobal('fetch', taskApi(task))
+    const user = userEvent.setup()
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: clipboard },
+    })
+    renderRoute('/tasks/task-copy')
+
+    const trigger = await screen.findByRole('button', { name: 'Open amendment draft' })
+    await user.click(trigger)
+    await user.clear(screen.getByLabelText('Opening'))
+    await user.type(screen.getByLabelText('Opening'), 'Hello operations team,')
+    await user.click(screen.getByRole('button', { name: 'Regenerate with Gemini' }))
+    expect(screen.getByText('Replace the current wording?')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Confirm regenerate' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Keep current draft' }))
+
+    await user.clear(screen.getByLabelText('Opening'))
+    await user.type(screen.getByLabelText('Opening'), amendmentDraft().opening)
+    await user.click(screen.getByRole('button', { name: 'Copy email' }))
+    await waitFor(() => expect(clipboard).toHaveBeenCalledOnce())
+    expect(await screen.findByText(/Clipboard access was unavailable/)).toBeInTheDocument()
+    const preview = screen.getByLabelText('Full email preview')
+    await waitFor(() => expect(preview).toHaveFocus())
+    expect((preview as HTMLTextAreaElement).value).toContain('Items requiring action:')
+    await user.type(screen.getByLabelText('Subject'), ' updated')
+    const confirmClose = vi
+      .spyOn(window, 'confirm')
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true)
+    await user.click(screen.getByRole('button', { name: 'Close dialog' }))
+    expect(screen.getByRole('dialog', { name: 'Draft amendment email' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Close dialog' }))
+    expect(confirmClose).toHaveBeenCalledTimes(2)
+    await waitFor(() => expect(trigger).toHaveFocus())
+  })
+
+  it('does not offer amendment drafting for read-only samples', async () => {
+    vi.stubGlobal('fetch', taskApi(sample()))
+    renderRoute('/tasks/email_test')
+    await screen.findByRole('heading', { name: 'Please check the draft' })
+    expect(screen.queryByRole('button', { name: /amendment email/i })).not.toBeInTheDocument()
   })
 })

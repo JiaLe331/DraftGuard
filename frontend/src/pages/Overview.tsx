@@ -6,6 +6,7 @@ import {
   WarningCircleIcon,
   ClockIcon,
   ClipboardTextIcon,
+  CaretDownIcon,
   TrayIcon,
   FileArrowUpIcon,
   PlusIcon,
@@ -179,6 +180,7 @@ export function Overview({ inbox = false }: { inbox?: boolean }) {
                   </option>
                 ))}
               </select>
+              <CaretDownIcon aria-hidden="true" size={14} weight="bold" />
             </label>
             <label className="select-wrap">
               <span className="sr-only">Filter by category</span>
@@ -194,6 +196,7 @@ export function Overview({ inbox = false }: { inbox?: boolean }) {
                 ))}
                 <option value="UNCLASSIFIED">Needs classification</option>
               </select>
+              <CaretDownIcon aria-hidden="true" size={14} weight="bold" />
             </label>
           </div>
         </div>
@@ -206,7 +209,7 @@ export function Overview({ inbox = false }: { inbox?: boolean }) {
           </div>
         )}
         {error ? (
-          <EmptyState title="The mailbox could not be loaded">
+          <EmptyState title="The mailbox could not be loaded" tone="error">
             <p role="alert">{error.message}</p>
             <button className="button primary" onClick={retry}>
               Retry connection

@@ -94,7 +94,7 @@ cd frontend
 pnpm dev
 ```
 
-Open <http://localhost:5173/overview>. Both services are needed. Before import the UI shows an empty-mailbox explanation; when the backend is unavailable it offers a connection retry, without fabricated fallback results.
+Open <http://localhost:5173/> for the product landing page, then use its CTA to enter the workspace at <http://localhost:5173/overview>. Both services are needed for the workspace. Before import the UI shows an empty-mailbox explanation; when the backend is unavailable it offers a connection retry, without fabricated fallback results.
 
 ## Gemini configuration and local acceptance
 

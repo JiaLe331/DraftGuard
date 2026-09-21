@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="DraftGuard technical stack: React, TypeScript, Vite and CSS; Python and FastAPI; Google Gemini; Supabase; and Google Cloud Run." />
+    <title>DraftGuard — Technical Stack</title>
+    <link rel="icon" href="data:," />
+    <style>
+      * { box-sizing: border-box; }
+      :root { font-family: Arial, Helvetica, sans-serif; color: #111; background: #f3f4f6; }
+      body { margin: 0; min-width: 320px; min-height: 100vh; display: grid; place-items: center; }
+      .slide { position: relative; width: min(100%, 1440px); aspect-ratio: 16 / 9; background: #fff; container-type: inline-size; }
+      h1, h2, p { margin: 0; }
+      h1 { position: absolute; top: 9.6%; left: 5.8%; font-size: 4.5cqw; line-height: 1.05; letter-spacing: -.13cqw; font-weight: 750; }
+      .brand { position: absolute; top: 10.6%; right: 5.8%; display: flex; align-items: center; gap: .55cqw; font-size: 1.5cqw; font-weight: 700; letter-spacing: -.05cqw; }
+      .brand svg { width: 1.75cqw; height: 1.75cqw; }
+      .diagram { position: absolute; left: 9.5%; top: 27.2%; width: 81.5%; height: 62.7%; display: grid; grid-template-columns: 22.6% 9% 19.4% 8.8% 40.2%; grid-template-rows: 26.05% 13.48% 26.05% 11.86% 22.56%; }
+      .stack { position: relative; min-width: 0; }
+      h2 { position: absolute; top: -2.25cqw; left: .05cqw; font-size: 1.48cqw; line-height: 1.2; font-weight: 700; }
+      .card { width: 100%; height: 100%; border: 2px solid #111; border-radius: 1.6cqw; background: #fff; display: flex; align-items: center; justify-content: center; }
+      .frontend { grid-column: 1; grid-row: 1 / 6; }
+      .backend { grid-column: 3; grid-row: 1 / 4; }
+      .deployment { grid-column: 5; grid-row: 1; }
+      .database { grid-column: 5; grid-row: 3; }
+      .ai { grid-column: 3 / 6; grid-row: 5; }
+      .technologies { list-style: none; margin: 0; padding: 0; }
+      .frontend .technologies { display: flex; flex-direction: column; gap: 2.2cqw; }
+      .technology { display: flex; align-items: center; gap: 1.15cqw; font-size: 1.42cqw; line-height: 1.25; }
+      .logo { width: 4.2cqw; height: 4.2cqw; flex: none; display: block; overflow: visible; }
+      .frontend .logo { width: 3.9cqw; height: 3.9cqw; }
+      .backend .technologies { display: flex; flex-direction: column; gap: 2cqw; }
+      .backend .technology { flex-direction: column; gap: .55cqw; }
+      .backend .logo { width: 5.5cqw; height: 5.5cqw; }
+      .service { display: flex; align-items: center; gap: 1.25cqw; }
+      .service-name { font-size: 2.05cqw; letter-spacing: -.06cqw; line-height: 1.25; font-weight: 600; }
+      .service-detail { margin-top: .4cqw; font-size: 1.05cqw; color: #555; line-height: 1.35; }
+      .supabase-name { font-size: 2.6cqw; font-weight: 650; letter-spacing: -.1cqw; }
+      .database .logo { width: 3.2cqw; height: 3.8cqw; }
+      .gemini { position: relative; font-size: 3.1cqw; font-weight: 400; letter-spacing: -.16cqw; line-height: 1.2; padding-right: .25cqw; color: #527ee9; }
+      .gemini-word { background: linear-gradient(100deg, #4796ff 5%, #7883ed 58%, #bd73ad 83%, #dc7786); background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+      .gemini svg { position: absolute; width: 1.45cqw; height: 1.45cqw; right: 2.1cqw; top: -1cqw; }
+      .connections { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+      .flow { fill: none; stroke: #111; stroke-width: 2.3; marker-end: url(#arrow); }
+      .hosting { fill: none; stroke: #888; stroke-width: 1.5; stroke-dasharray: 5 5; }
+      .footer { position: absolute; left: 9.5%; right: 9%; bottom: 3.8%; display: flex; align-items: center; justify-content: flex-end; gap: 16px; font-size: .85cqw; line-height: 1.4; color: #666; }
+      .legend { display: inline-flex; align-items: center; gap: .55cqw; white-space: nowrap; }
+      .legend::before { content: ""; width: 2.2cqw; border-top: 1.5px dashed #888; }
+      .mobile-flow { display: none; }
+      .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+      @media screen and (max-width: 700px) {
+        body { display: block; background: #fff; }
+        .slide { width: 100%; aspect-ratio: auto; padding: 32px 24px 24px; }
+        h1 { position: static; font-size: clamp(30px, 7.5vw, 48px); letter-spacing: -1.4px; margin: 26px 0 34px; }
+        .brand { position: static; font-size: 17px; letter-spacing: -.5px; gap: 6px; }
+        .brand svg { width: 22px; height: 22px; }
+        .diagram { position: static; width: 100%; height: auto; display: flex; flex-direction: column; gap: 28px; }
+        h2 { position: static; font-size: 17px; margin-bottom: 10px; }
+        .card { height: auto; min-height: 120px; border-radius: 18px; padding: 24px; }
+        .frontend .technologies { width: 100%; gap: 24px; }
+        .technology { font-size: 17px; gap: 20px; }
+        .frontend .logo, .logo { width: 46px; height: 46px; }
+        .backend .technologies { flex-direction: row; justify-content: space-evenly; width: 100%; gap: 24px; }
+        .backend .technology { gap: 8px; }
+        .backend .logo { width: 58px; height: 58px; }
+        .service { gap: 16px; }
+        .service-name { font-size: 23px; letter-spacing: -.6px; }
+        .service-detail { margin-top: 6px; font-size: 13px; }
+        .supabase-name { font-size: 30px; letter-spacing: -1px; }
+        .database .logo { width: 38px; height: 46px; }
+        .gemini { font-size: 42px; letter-spacing: -2px; padding-right: 3px; }
+        .gemini svg { width: 20px; height: 20px; right: 28px; top: -13px; }
+        .connections { display: none; }
+        .mobile-flow { display: block; font-size: 13px; line-height: 1.6; color: #555; margin-top: 12px; }
+        .footer { display: none; }
+        .legend { display: none; }
+      }
+      @page { size: A4 landscape; margin: 10mm; }
+      @media print {
+        :root, body { background: #fff; }
+        body { display: block; min-width: 0; min-height: 0; }
+        .slide { width: 100%; max-width: none; break-inside: avoid; page-break-inside: avoid; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      Python, Vite and CSS SVG artwork adapted from Devicon (https://github.com/devicons/devicon).
+      Copyright (c) 2015 Konpa. MIT License:
+      Permission is hereby granted, free of charge, to any person obtaining a copy
+      of this software and associated documentation files (the "Software"), to deal
+      in the Software without restriction, including without limitation the rights
+      to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+      copies of the Software, and to permit persons to whom the Software is
+      furnished to do so, subject to the following conditions:
+      The above copyright notice and this permission notice shall be included in
+      all copies or substantial portions of the Software.
+      THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+      IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+      FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+      AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+      LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+      OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+      THE SOFTWARE.
+      Technology marks identify their respective products and owners.
+    -->
+    <main class="slide" aria-labelledby="page-title">
+      <header>
+        <div class="brand">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 2.5 21 6v5.5c0 5-4 8.5-9 10-5-1.5-9-5-9-10V6z"/><path d="m7.5 11.8 3 3 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>DraftGuard</span>
+        </div>
+        <h1 id="page-title">Technical Stack</h1>
+      </header>
+      <p class="sr-only" id="architecture-description">Target architecture. Google Cloud Run hosts the frontend web application and the backend API. The React frontend exchanges REST API requests and responses with FastAPI. The backend reads and writes application data and documents in Supabase, and calls Google Gemini for AI assistance. Gemini has no direct database connection.</p>
+      <div class="diagram" role="group" aria-label="System architecture" aria-describedby="architecture-description">
+        <svg class="connections" viewBox="0 0 1000 430" preserveAspectRatio="none" aria-hidden="true">
+          <defs><marker id="arrow" viewBox="0 0 8 8" refX="6.5" refY="4" markerWidth="5" markerHeight="5" orient="auto"><path d="M1 0 8 4 1 8z" fill="#111"/></marker></defs>
+          <!-- Hosting is an association, not a request/response flow. -->
+          <path class="hosting" d="M598 46H549V-40H175V0M452-40V0" />
+          <path class="flow" d="M246 130H296" />
+          <path class="flow" d="M296 153H246" />
+          <path class="flow" d="M530 206H578" />
+          <path class="flow" d="M578 229H530" />
+          <path class="flow" d="M401 323V295" />
+          <path class="flow" d="M425 295V323" />
+        </svg>
+        <section class="stack frontend" aria-labelledby="frontend-title">
+          <h2 id="frontend-title">Frontend</h2>
+          <div class="card">
+            <ul class="technologies">
+              <li class="technology">
+                <svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><path fill="#007acc" d="M2 2h60v60H2z"/><text x="16" y="53" fill="#fff" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="700">TS</text></svg>
+                <span>TypeScript</span>
+              </li>
+              <li class="technology">
+                <svg class="logo" viewBox="-32 -32 64 64" aria-hidden="true"><g fill="none" stroke="#61dafb" stroke-width="2.3"><ellipse rx="29" ry="11"/><ellipse rx="29" ry="11" transform="rotate(60)"/><ellipse rx="29" ry="11" transform="rotate(120)"/></g><circle r="5.4" fill="#61dafb"/></svg>
+                <span>React</span>
+              </li>
+              <li class="technology">
+                <svg class="logo" viewBox="0 0 128 128" aria-hidden="true">
+                  <defs><linearGradient id="vite-purple" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#41d1ff"/><stop offset="1" stop-color="#bd34fe"/></linearGradient><linearGradient id="vite-yellow" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#ffea83"/><stop offset="1" stop-color="#ffa800"/></linearGradient></defs>
+                  <path fill="url(#vite-purple)" d="M124.766 19.52 67.324 122.238c-1.187 2.121-4.234 2.133-5.437.024L3.305 19.532c-1.313-2.302.652-5.087 3.261-4.622L64.07 25.187a3.09 3.09 0 0 0 1.11 0l56.3-10.261c2.598-.473 4.575 2.289 3.286 4.594Z"/>
+                  <path fill="url(#vite-yellow)" d="M91.46 1.43 48.954 9.758a1.56 1.56 0 0 0-1.258 1.437l-2.617 44.168a1.563 1.563 0 0 0 1.91 1.614l11.836-2.735a1.562 1.562 0 0 1 1.88 1.836l-3.517 17.219a1.562 1.562 0 0 0 1.985 1.805l7.308-2.223c1.133-.344 2.223.652 1.985 1.812l-5.59 27.047c-.348 1.692 1.902 2.614 2.84 1.164l.625-.968 34.64-69.13c.582-1.16-.421-2.48-1.69-2.234l-12.185 2.352a1.558 1.558 0 0 1-1.793-1.965l7.95-27.562A1.56 1.56 0 0 0 91.46 1.43Z"/>
+                </svg>
+                <span>Vite</span>
+              </li>
+              <li class="technology">
+                <svg class="logo" viewBox="0 0 128 128" aria-hidden="true"><path fill="#1572b6" d="M18.814 114.123 8.76 1.352h110.48l-10.064 112.754-45.243 12.543z"/><path fill="#33a9dc" d="m64.001 117.062 36.559-10.136 8.601-96.354h-45.16z"/><path fill="#fff" d="M64.001 51.429h18.302l1.264-14.163H64.001V23.435h34.682l-.332 3.711-3.4 38.114h-30.95z"/><path fill="#ebebeb" d="m64.083 87.349-.061.018-15.403-4.159-.985-11.031H33.752l1.937 21.717 28.331 7.863.063-.018z"/><path fill="#fff" d="m81.127 64.675-1.666 18.522-15.426 4.164v14.39l28.354-7.858.208-2.337 2.406-26.881z"/><path fill="#ebebeb" d="M64.048 23.435v13.831H30.64l-.277-3.108-.63-7.012-.331-3.711zm-.047 27.996v13.831H48.792l-.277-3.108-.631-7.012-.33-3.711z"/></svg>
+                <span>CSS</span>
+              </li>
+            </ul>
+          </div>
+        </section>
+        <section class="stack backend" aria-labelledby="backend-title">
+          <h2 id="backend-title">Backend</h2>
+          <div class="card">
+            <ul class="technologies">
+              <li class="technology">
+                <svg class="logo" viewBox="0 0 128 128" aria-hidden="true">
+                  <defs><linearGradient id="python-blue" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#5a9fd4"/><stop offset="1" stop-color="#306998"/></linearGradient><linearGradient id="python-yellow" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ffe873"/><stop offset="1" stop-color="#ffd43b"/></linearGradient></defs>
+                  <g transform="translate(0 8)">
+                    <path fill="url(#python-blue)" d="M63.391 1.988c-4.222.02-8.252.379-11.8 1.007-10.45 1.846-12.346 5.71-12.346 12.837v9.411h24.693v3.137H29.977c-7.176 0-13.46 4.313-15.426 12.521-2.268 9.405-2.368 15.275 0 25.096 1.755 7.311 5.947 12.519 13.124 12.519h8.491V67.234c0-8.151 7.051-15.34 15.426-15.34h24.665c6.866 0 12.346-5.654 12.346-12.548V15.833c0-6.693-5.646-11.72-12.346-12.837-4.244-.706-8.645-1.027-12.866-1.008zM50.037 9.557c2.55 0 4.634 2.117 4.634 4.721 0 2.593-2.083 4.69-4.634 4.69-2.56 0-4.633-2.097-4.633-4.69-.001-2.604 2.073-4.721 4.633-4.721z"/>
+                    <path fill="url(#python-yellow)" d="M91.682 28.38v10.966c0 8.5-7.208 15.655-15.426 15.655H51.591c-6.756 0-12.346 5.783-12.346 12.549v23.515c0 6.691 5.818 10.628 12.346 12.547 7.816 2.297 15.312 2.713 24.665 0 6.216-1.801 12.346-5.423 12.346-12.547v-9.412H63.938v-3.138h37.012c7.176 0 9.852-5.005 12.348-12.519 2.578-7.735 2.467-15.174 0-25.096-1.774-7.145-5.161-12.521-12.348-12.521h-9.268zM77.809 87.927c2.561 0 4.634 2.097 4.634 4.692 0 2.602-2.074 4.719-4.634 4.719-2.55 0-4.633-2.117-4.633-4.719 0-2.595 2.083-4.692 4.633-4.692z"/>
+                  </g>
+                </svg>
+                <span>Python</span>
+              </li>
+              <li class="technology">
+                <svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="31" fill="#009688"/><path fill="#fff" d="M35 6 18 35h13v23l16-30H35z"/></svg>
+                <span>FastAPI</span>
+              </li>
+            </ul>
+          </div>
+          <p class="mobile-flow">Frontend ↔ Backend · REST API</p>
+        </section>
+        <section class="stack deployment" aria-labelledby="deployment-title">
+          <h2 id="deployment-title">Deployment</h2>
+          <div class="card">
+            <div class="service">
+              <svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><path fill="#4285f4" d="M18 4h28l16 28-16 28H18L2 32z"/><path fill="#3367d6" d="m37 17 21 23-12 20H33L21 43z"/><g fill="none" stroke="#fff" stroke-width="4" stroke-linejoin="round"><path d="m20 20 13 12-13 12M33 20l13 12-13 12"/></g></svg>
+              <div><p class="service-name">Google Cloud Run</p><p class="service-detail">Frontend + Backend</p></div>
+            </div>
+          </div>
+        </section>
+        <section class="stack database" aria-labelledby="database-title">
+          <h2 id="database-title">Database</h2>
+          <div class="card">
+            <div class="service">
+              <svg class="logo" viewBox="0 0 64 72" aria-hidden="true"><defs><linearGradient id="supabase-green" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#249361"/><stop offset="1" stop-color="#3ecf8e"/></linearGradient></defs><path fill="url(#supabase-green)" d="M32 28h25c5 0 7 5 4 9L36 69c-2 3-6 2-6-2z"/><path fill="#3ecf8e" d="M29 3c2-3 6-2 6 2v40H7c-5 0-7-5-4-9z"/></svg>
+              <div><p class="service-name supabase-name">supabase</p><p class="service-detail">PostgreSQL + Private Storage</p></div>
+            </div>
+          </div>
+          <p class="mobile-flow">Backend ↔ Supabase · Data &amp; documents</p>
+        </section>
+        <section class="stack ai" aria-labelledby="ai-title">
+          <h2 id="ai-title">AI</h2>
+          <div class="card">
+            <div class="gemini" aria-label="Google Gemini">
+              <svg viewBox="0 0 32 32" aria-hidden="true"><defs><linearGradient id="gemini-spark" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#4698fa"/><stop offset="1" stop-color="#af78c9"/></linearGradient></defs><path fill="url(#gemini-spark)" d="M16 0C18 10 22 14 32 16 22 18 18 22 16 32 14 22 10 18 0 16 10 14 14 10 16 0Z"/></svg>
+              <span class="gemini-word">Gemini</span>
+            </div>
+            <span class="sr-only">Server-side classification, text and PDF extraction, and amendment wording.</span>
+          </div>
+          <p class="mobile-flow">Backend ↔ Gemini · AI requests &amp; results</p>
+        </section>
+      </div>
+      <footer class="footer">
+        <span class="legend">Hosting</span>
+      </footer>
+    </main>
+  </body>
+</html>

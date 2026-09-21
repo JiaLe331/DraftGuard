@@ -20,9 +20,9 @@ The list uses 50-item server pagination and dataset order. Filters reset paginat
 
 - Show original email context, registered attachments, source revision, seven raw/normalized field pairs, coverage, known discrepancies, and concrete review requirements.
 - Evidence references a specific immutable document and an actual line, PDF page, DOCX paragraph/table row, or XLSX sheet/cell range. Attachment buttons open an accessible in-page dialog. TXT shows original text; PDF.js renders the actual PDF at the evidence page with pagination and automatic fit-to-width sizing. Office formats show explicitly labeled extracted text, not an original-layout renderer. Download original is available for all formats. Loading/errors, retry, Escape dismissal, and focus restoration are supported.
-- Source selection does not reassign document roles. Unknown or ambiguous roles remain unresolved; the user can still inspect original attachments.
+- The evidence source selector does not reassign roles. Local tasks have a separate explicit SI/BL pair selector; content validation still applies and unresolved role ambiguity blocks comparison.
 - Reanalysis starts a saved, bounded background operation. Busy controls prevent duplicate submissions. Completed attempts are saved before the current result is refreshed. A failed latest attempt leaves the previous successful result visible with a failure banner.
-- `Ready for review` means seven fields match with supported evidence; it does not record human approval. Editing, completion, replacing attachments, and simulated revisions are not offered in this milestone.
+- `Ready for review` means seven fields match with supported evidence; it does not record human approval. Local tasks support real source replacements and version changes. Human extraction editing and completion acknowledgment remain unavailable.
 - Print report opens a readable in-page preview. The browser print action uses the same report component, removes navigation, repeats table headers, and includes source IDs/hashes, evidence, unresolved items, actual run metadata, and the absence of a human completion acknowledgment. Native print dialogs depend on browser support.
 
 ## Routes and failures
@@ -35,7 +35,7 @@ Handle loading, dataset not imported, no search results, invalid/missing task, A
 
 Run the frontend checks in README. Component tests exercise server totals/pagination, retry without fixture fallback, empty import, actual evidence links, removal of prototype-only actions, report preview, failed rerun recovery, and stale-response handling. Backend tests own the authoritative document and comparison rules.
 
-This UI is backed by a local development mailbox. Multi-user sessions, cloud persistence, Gemini, human review writes, uploaded replacements, and the PRD's public deployment gate remain future work. Development runtime data is not part of the Git changes.
+This UI is backed by a local development mailbox. Multi-user sessions, cloud persistence, Gemini, human review writes, and the PRD's public deployment gate remain future work. Development runtime data is not part of the Git changes.
 
 ## Local extraction
 
@@ -84,3 +84,9 @@ after processing completes; the existing classification/comparison workflow rema
 - A neutral summary reports actual classification, discrepancies, and review requirements. Saved reports remain available after refresh without replaying the presentation. Desktop uses files-left/action-right layout; mobile stacks them with a full-width action.
 
 A single caption beneath the loading icon replaces the static processing-logic block. During the four-second presentation it changes once per second with a 200ms fade. After the endpoint saves a result, captions narrate completed work from that actual run: email context, classification, document parsing when performed, and checked fields/evidence when available. Classification-only and blocked runs get relevant captions instead. Slow requests retain an indeterminate analysis message; the endpoint does not expose live stage telemetry. The Preparing your results label distinguishes presentation from backend processing without a save announcement. Reduced motion disables caption animation and timed changes; navigation cleans up the timer.
+
+## Local task revision workflow
+
+Sample workspaces offer creation of a local task copy. Inbox lists those tasks separately from baseline examples. Copies start without analysis results, use the shared pipeline, and preserve the baseline. Task source controls allow adding/replacing SI or BL and explicit pairing; successful changes save a new revision before requesting analysis. Failed analysis submission leaves a retryable saved revision.
+
+The comparison shows resolved, persisting, new, and uncertain field changes against a fixed prior-version run. Uncertainty is not resolution. A same-revision rerun retains the version baseline. History selection opens a read-only run snapshot and report bound to its exact documents; return to the current version to modify sources. Source changes invalidate the previous result's current designation. Machine readiness never implies human completion.

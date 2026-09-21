@@ -8,7 +8,7 @@ import {
   FileTextIcon,
   EnvelopeSimpleIcon,
 } from '@phosphor-icons/react'
-import { useResource } from '../mailbox/api'
+import { taskPath, useResource } from '../mailbox/api'
 import { useMailbox } from '../mailbox/context'
 import { useAnalysis } from '../mailbox/useAnalysis'
 import {
@@ -21,13 +21,17 @@ import {
 import type { Health } from '../extraction/api'
 import { EmptyState, StatusBadge } from '../components/Primitives'
 import { Report } from '../components/Report'
+import { CloneTask, TaskSources, RevisionChanges } from '../components/TaskSources'
 import { DocumentPreview } from '../components/DocumentPreview'
 
 export function Workspace() {
   const { taskId } = useParams()
   const { refresh } = useMailbox()
+  const [params] = useSearchParams()
+  const runId = params.get('run')
+  const path = taskPath(taskId ?? '')
   const { data, error, reload } = useResource<SampleDetail>(
-    `/api/v1/samples/${encodeURIComponent(taskId ?? '')}`,
+    runId && taskId?.startsWith('task-') ? `${path}/runs/${encodeURIComponent(runId)}` : path,
   )
   const completedRunId = data?.latest_run?.status !== 'RUNNING' ? data?.latest_run?.id : undefined
   useEffect(() => {
@@ -64,7 +68,13 @@ export function Workspace() {
         Opening workspace…
       </div>
     )
-  return <TaskWorkspace key={data.id + ':' + data.latest_run?.id} task={data} reload={reload} />
+  return (
+    <TaskWorkspace
+      key={data.id + ':' + data.revision + ':' + runId + ':' + data.latest_run?.id}
+      task={data}
+      reload={reload}
+    />
+  )
 }
 function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: () => void }) {
   const { refresh } = useMailbox()
@@ -87,6 +97,8 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
   useEffect(() => {
     if (phase === 'revealed') summaryRef.current?.focus({ preventScroll: true })
   }, [phase])
+  const localTask = task.id.startsWith('task-')
+  const historical = !!task.is_historical || !!params.get('run')
   const result = task.current_run?.result
   const fields = result?.fields ?? []
   const field =
@@ -134,7 +146,7 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
             Print / Save PDF
           </button>
         </div>
-        <Report task={task} preview />
+        <Report task={{ ...task, is_historical: historical }} preview />
       </div>
     )
   const comparison = task.category === 'BL_COMPARISON'
@@ -164,8 +176,12 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
             <PrinterIcon size={16} />
             Print report
           </button>
-          {result && (
-            <button className="button primary compact" disabled={processing} onClick={reanalyze}>
+          {result && !historical && (
+            <button
+              className="button primary compact"
+              disabled={processing}
+              onClick={() => reanalyze()}
+            >
               <ArrowClockwiseIcon
                 size={16}
                 className={phase === 'running' ? 'analysis-spinner' : undefined}
@@ -209,6 +225,26 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
         <div className="notice danger" role="alert">
           {error} Use Refresh to check whether the analysis was saved.
         </div>
+      )}
+      {historical && (
+        <div className="notice warning">
+          <strong>Historical result · Read only</strong>
+          <Link className="button" to={`/tasks/${task.id}`}>
+            Return to current revision
+          </Link>
+        </div>
+      )}
+      {localTask && !historical && (
+        <TaskSources
+          key={`${task.revision}:${task.current_si_id}:${task.current_bl_id}`}
+          task={task}
+          disabled={processing}
+          onSaved={reanalyze}
+          reload={reload}
+        />
+      )}
+      {!localTask && health.data?.capabilities?.development_tasks && (
+        <CloneTask sample={task} disabled={processing} />
       )}
       <section
         className={`analysis-workbench ${phase === 'running' ? 'is-running' : phase === 'preparing' ? 'is-preparing' : ''}`}
@@ -260,8 +296,8 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
               hasAttachments={task.documents.length > 0}
             />
           )}
-          {!result && (
-            <button className="button primary" onClick={reanalyze} disabled={processing}>
+          {!result && !historical && (
+            <button className="button primary" onClick={() => reanalyze()} disabled={processing}>
               {processing
                 ? phase === 'preparing'
                   ? 'Preparing results…'
@@ -325,6 +361,7 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
         </div>
         <span className="small-text">{task.current_run?.pipeline_version} · Saved locally</span>
       </div>
+      <RevisionChanges task={task} />
       {result?.review_requirements.map((problem, i) => (
         <div className="notice warning" key={`${problem.code}-${i}`}>
           <div>
@@ -538,6 +575,30 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
           onClose={() => setPreview(null)}
         />
       )}
+      {localTask && (
+        <label className="history-selector">
+          View analysis version
+          <select
+            value={params.get('run') ?? ''}
+            onChange={(event) => {
+              const next = new URLSearchParams(params)
+              if (event.target.value) next.set('run', event.target.value)
+              else next.delete('run')
+              next.delete('report')
+              setParams(next)
+            }}
+          >
+            <option value="">Current task</option>
+            {task.runs
+              .filter((run) => run.status === 'SUCCEEDED')
+              .map((run) => (
+                <option key={run.id} value={run.id}>
+                  Revision {run.revision} · {analyzedAt(run.finished_at)} · {run.id}
+                </option>
+              ))}
+          </select>
+        </label>
+      )}
       <div className="workspace-bottom">
         <section className="panel review-history">
           <details>
@@ -575,17 +636,18 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
           <div>
             <h3>Analysis first. Human review next.</h3>
             <p>
-              These are machine results from the provided dataset. You can inspect sources and rerun
-              analysis. Human review tools are not available yet; no completion is recorded.
+              These are machine results from the selected source documents. You can inspect sources
+              and rerun analysis. Human review tools are not available yet; no completion is
+              recorded.
             </p>
           </div>
         </aside>
       </div>
       <p className="workspace-disclaimer">
-        Demo mailbox · Provided dataset. This seven-field check is not a complete bill-of-lading
-        approval.
+        {localTask ? 'Local working copy' : 'Demo mailbox · Provided dataset'}. This seven-field
+        check is not a complete bill-of-lading approval.
       </p>
-      {result && <Report task={task} />}
+      {result && <Report task={{ ...task, is_historical: historical }} />}
     </div>
   )
 }

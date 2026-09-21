@@ -27,6 +27,7 @@ def test_health_without_cloud_configuration(monkeypatch, tmp_path):
         "service": "draftguard-api",
         "capabilities": {
             "development_extraction": False,
+            "development_tasks": True,
             "upload_limit_bytes": 3 * 1024 * 1024,
         },
     }
@@ -44,3 +45,11 @@ def test_cors_allows_only_configured_origin(tmp_path):
         denied = client.get("/api/health", headers={"Origin": "https://other.example.com"})
     assert allowed.headers["access-control-allow-origin"] == "https://frontend.example.com"
     assert "access-control-allow-origin" not in denied.headers
+
+
+def test_production_health_does_not_advertise_local_task_capability(tmp_path):
+    settings = Settings(app_env="production", local_data_dir=tmp_path, _env_file=None)
+    with TestClient(create_app(settings)) as client:
+        response = client.get("/api/health")
+    assert response.status_code == 200
+    assert response.json()["capabilities"]["development_tasks"] is False

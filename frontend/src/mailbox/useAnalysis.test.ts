@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAnalysis } from './useAnalysis'
 import { request } from './api'
 import type { SampleDetail } from './types'
-vi.mock('./api', () => ({ request: vi.fn() }))
+vi.mock('./api', async (original) => ({
+  ...(await original<typeof import('./api')>()),
+  request: vi.fn(),
+}))
 const initial = { id: 'one', revision: 1, latest_run: null } as SampleDetail
 const saved = {
   ...initial,

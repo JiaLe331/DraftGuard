@@ -1,3 +1,4 @@
+import { RevisionChanges } from './TaskSources'
 import { analyzedAt, fieldLabels, statusLabels, type SampleDetail } from '../mailbox/types'
 export function Report({ task, preview = false }: { task: SampleDetail; preview?: boolean }) {
   const run = task.current_run
@@ -5,14 +6,21 @@ export function Report({ task, preview = false }: { task: SampleDetail; preview?
   if (!result || !run) return null
   return (
     <article className={`print-report ${preview ? 'report-preview' : ''}`}>
-      <div className="eyebrow">DRAFTGUARD · PROVIDED DATASET</div>
+      <div className="eyebrow">
+        DRAFTGUARD · {task.baseline_id ? 'LOCAL WORKING COPY' : 'PROVIDED DATASET'}
+      </div>
       <h1>Document analysis report</h1>
+      {task.is_historical && (
+        <p>
+          <strong>Historical result · Not the current check</strong>
+        </p>
+      )}
       <p>
         {task.id} · {task.subject}
       </p>
       <p>From: {task.sender}</p>
       <p>
-        Generated {new Date().toLocaleString('en-GB')} · Source revision {task.revision}
+        Generated {new Date().toLocaleString('en-GB')} · Source revision {run.revision}
       </p>
       <p>
         {run.mode === 'precomputed' ? 'Precomputed' : 'On demand'} · Rules · {run.pipeline_version}{' '}
@@ -28,13 +36,15 @@ export function Report({ task, preview = false }: { task: SampleDetail; preview?
         </p>
       )}
       <h2>Source documents</h2>
-      {task.documents.map((doc) => (
-        <p key={doc.id}>
-          {doc.filename} · v{doc.version} · {doc.id}
-          <br />
-          SHA-256: {doc.sha256}
-        </p>
-      ))}
+      {task.documents
+        .filter((doc) => run.document_ids.includes(doc.id))
+        .map((doc) => (
+          <p key={doc.id}>
+            {doc.filename} · v{doc.version} · {doc.id}
+            <br />
+            SHA-256: {doc.sha256}
+          </p>
+        ))}
       <p>
         {result.coverage.checked}/7 fields checked · {result.known_defect_fields.length}{' '}
         discrepancies.
@@ -90,6 +100,7 @@ export function Report({ task, preview = false }: { task: SampleDetail; preview?
       {result.review_requirements.map((p, i) => (
         <p key={i}>{p.message}</p>
       ))}
+      <RevisionChanges task={task} />
       <h2>Human review</h2>
       <p>
         Machine-only results. No human corrections or completion acknowledgment have been recorded.

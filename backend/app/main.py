@@ -10,6 +10,7 @@ from starlette.exceptions import HTTPException
 
 from app.api.health import router as health_router
 from app.api.samples import build_router
+from app.api.tasks import build_task_router
 from app.config import Settings
 from app.dev_extraction.api import router as dev_router
 from app.dev_extraction.dataset import DatasetError
@@ -53,6 +54,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             settings.local_data_dir, application.state.run_service
         )
         application.include_router(build_router(settings, application.state.mailbox_store))
+        application.include_router(build_task_router(settings, application.state.mailbox_store))
         if settings.dev_extraction_enabled:
             application.include_router(dev_router)
 
@@ -74,7 +76,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @application.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError):
-        if request.url.path.startswith(("/api/v1/samples", "/api/v1/dev/samples")):
+        if request.url.path.startswith(
+            ("/api/v1/samples", "/api/v1/dev/samples", "/api/v1/dev/tasks")
+        ):
             return await request_validation_exception_handler(request, exc)
         return error_response(
             "INVALID_REQUEST",
@@ -85,7 +89,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @application.exception_handler(HTTPException)
     async def http_error(request: Request, exc: HTTPException):
-        if request.url.path.startswith(("/api/v1/samples", "/api/v1/dev/samples")):
+        if request.url.path.startswith(
+            ("/api/v1/samples", "/api/v1/dev/samples", "/api/v1/dev/tasks")
+        ):
             return await http_exception_handler(request, exc)
         return error_response(
             "NOT_FOUND" if exc.status_code == 404 else "REQUEST_REJECTED",

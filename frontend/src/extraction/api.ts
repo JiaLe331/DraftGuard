@@ -112,7 +112,11 @@ export type Page<T> = {
   dataset_total?: number
 }
 export type Health = {
-  capabilities?: { development_extraction: boolean; upload_limit_bytes: number }
+  capabilities?: {
+    development_tasks?: boolean
+    development_extraction: boolean
+    upload_limit_bytes: number
+  }
 }
 
 export function apiUrl(path: string): string {

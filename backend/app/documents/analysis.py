@@ -119,7 +119,7 @@ def adapt_document(document: dict) -> dict:
     }
 
 
-def compare(classification: dict, documents: list[dict], emit=None) -> dict:
+def compare(classification: dict, documents: list[dict], emit=None, selected_pair=None) -> dict:
     result = {
         "classification": classification,
         "documents": [],
@@ -147,7 +147,16 @@ def compare(classification: dict, documents: list[dict], emit=None) -> dict:
             if issue != adapted["error"]:
                 requirements.append({**issue, "document_id": adapted["id"]})
     for role in ("si", "bl"):
-        options = [d for d in result["documents"] if d["role"] == role]
+        options = [
+            d
+            for d in result["documents"]
+            if d["role"] == role
+            and (
+                selected_pair is None
+                or role not in selected_pair
+                or d["id"] == selected_pair.get(role)
+            )
+        ]
         if len(options) == 1:
             selected[role] = options[0]
         elif len(options) > 1:
@@ -157,6 +166,15 @@ def compare(classification: dict, documents: list[dict], emit=None) -> dict:
                     "message": f"Multiple {role.upper()} documents require pair selection.",
                 }
             )
+    if selected_pair is not None and len(selected) == 2:
+        # A task may discover its remaining role on the first run after upload.
+        # Superseded candidates must not block a fully identified current pair.
+        selected_ids = {document["id"] for document in selected.values()}
+        requirements[:] = [
+            item
+            for item in requirements
+            if "document_id" not in item or item["document_id"] in selected_ids
+        ]
     if emit:
         emit(
             "pair_selection",
@@ -165,7 +183,9 @@ def compare(classification: dict, documents: list[dict], emit=None) -> dict:
             selected_document_ids={role: doc["id"] for role, doc in selected.items()},
             rule="unique_document_per_role",
         )
-    if len(documents) < 2:
+    if len(documents) < 2 or (
+        selected_pair is not None and any(selected_pair.get(role) is None for role in selected_pair)
+    ):
         requirements.append(
             {
                 "code": "missing_attachment",
@@ -214,7 +234,9 @@ def compare(classification: dict, documents: list[dict], emit=None) -> dict:
                 "message": "Some fields need readable evidence, explicit units, or missing values.",
             }
         )
-    if len(documents) < 2:
+    if len(documents) < 2 or (
+        selected_pair is not None and any(selected_pair.get(role) is None for role in selected_pair)
+    ):
         result["workflow_state"] = "WAITING_DOCUMENT"
     elif requirements:
         result["workflow_state"] = "REVIEW_REQUIRED"
@@ -234,3 +256,28 @@ def analyze(email: dict, documents: list[dict]) -> dict:
             result = extract_document(Path(doc["path"]).read_bytes(), doc["filename"], doc["id"])
             results.append({"document_id": doc["id"], "result": result.model_dump(mode="json")})
     return compare(classification, results)
+
+
+def revision_delta(result, baseline, baseline_run_id):
+    """Compare confirmed findings; uncertainty is never a resolved discrepancy."""
+    delta = {
+        "baseline_run_id": baseline_run_id,
+        "resolved": [],
+        "persisting": [],
+        "new": [],
+        "uncertain": [],
+    }
+    if not baseline:
+        return delta
+    old = {field["key"]: field["finding"] for field in baseline["fields"]}
+    for field in result["fields"]:
+        key, finding = field["key"], field["finding"]
+        previous = old.get(key)
+        if finding in {"NEEDS_REVIEW", "NOT_CHECKED"}:
+            if previous not in {"NEEDS_REVIEW", "NOT_CHECKED"}:
+                delta["uncertain"].append(key)
+        elif finding == "MISMATCH":
+            delta["persisting" if previous == "MISMATCH" else "new"].append(key)
+        elif finding == "MATCH" and previous == "MISMATCH":
+            delta["resolved"].append(key)
+    return delta

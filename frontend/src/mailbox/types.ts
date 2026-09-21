@@ -109,7 +109,15 @@ export interface DocumentVersion {
   version: number
   created_at: string
 }
+export interface RevisionDelta {
+  baseline_run_id: string | null
+  resolved: FieldKey[]
+  persisting: FieldKey[]
+  new: FieldKey[]
+  uncertain: FieldKey[]
+}
 export interface Result {
+  revision_delta?: RevisionDelta | null
   classification: { category: Category | null; method: string; status: string; reason: string }
   documents: ParsedDocument[]
   fields: FieldResult[]
@@ -135,6 +143,10 @@ export interface Run extends RunSummary {
   document_ids: string[]
 }
 export interface SampleDetail extends Sample {
+  baseline_id?: string
+  current_si_id?: string | null
+  current_bl_id?: string | null
+  is_historical?: boolean
   body: string
   documents: DocumentVersion[]
   current_run: Run | null

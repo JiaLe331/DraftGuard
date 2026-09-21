@@ -17,6 +17,7 @@ from app.dev_extraction.store import AuditStore
 from app.documents.analysis import PIPELINE_VERSION
 from app.documents.workflow import MailboxWorkflow
 from app.extraction.models import ExtractionLimits
+from app.task_store import TaskStoreMixin
 
 EXTENSIONS = {".txt", ".pdf", ".docx", ".xlsx"}
 MAX_BYTES = ExtractionLimits().max_file_bytes
@@ -36,7 +37,7 @@ def encode(value) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
-class Store:
+class Store(TaskStoreMixin):
     def __init__(self, directory: Path, run_service: RunService | None = None):
         self.run_service = run_service
         self._service_lock = threading.Lock()
@@ -71,6 +72,23 @@ class Store:
             """)
             if "audit_run_id" not in {row[1] for row in db.execute("PRAGMA table_info(runs)")}:
                 db.execute("ALTER TABLE runs ADD COLUMN audit_run_id TEXT")
+            for table, columns in {
+                "emails": {
+                    "baseline_id": "TEXT",
+                    "current_si_id": "TEXT",
+                    "current_bl_id": "TEXT",
+                    "pair_selected": "INTEGER NOT NULL DEFAULT 0",
+                },
+                "runs": {
+                    "baseline_run_id": "TEXT",
+                    "current_si_id": "TEXT",
+                    "current_bl_id": "TEXT",
+                },
+            }.items():
+                existing = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+                for column, definition in columns.items():
+                    if column not in existing:
+                        db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
             # Leave time for the shared 60s run deadline and final persistence.
             cutoff = (datetime.now(UTC) - timedelta(seconds=120)).isoformat()
             db.execute(
@@ -346,6 +364,10 @@ class Store:
                 )
             self._check_not_running(db, email)
             docs = self._documents(db, email)
+            if email["baseline_id"] and email["pair_selected"]:
+                pair_ids = {email["current_si_id"], email["current_bl_id"]}
+                docs = [doc for doc in docs if doc["id"] in pair_ids]
+            baseline_run_id = self._revision_baseline(db, email) if email["baseline_id"] else None
             db.execute(
                 "INSERT INTO runs (id,email_id,revision,document_ids,pipeline_version,mode,"
                 "status,started_at) VALUES (?,?,?,?,?,?,'RUNNING',?)",
@@ -353,12 +375,17 @@ class Store:
                     run_id,
                     email_id,
                     expected_revision,
-                    email["document_ids"],
+                    encode([doc["id"] for doc in docs]),
                     PIPELINE_VERSION,
                     mode,
                     now(),
                 ),
             )
+            db.execute(
+                "UPDATE runs SET baseline_run_id=?,current_si_id=?,current_bl_id=? WHERE id=?",
+                (baseline_run_id, email["current_si_id"], email["current_bl_id"], run_id),
+            )
+            email["baseline_run_id"] = baseline_run_id
             db.execute("UPDATE emails SET latest_run_id=? WHERE id=?", (run_id, email_id))
 
         def read(document):
@@ -368,7 +395,18 @@ class Store:
                 raise DatasetError(exc.code, str(exc), exc.status) from exc
 
         inputs = [
-            DocumentInput(doc["filename"], lambda doc=doc: read(doc), document_id=doc["id"])
+            DocumentInput(
+                doc["filename"],
+                lambda doc=doc: read(doc),
+                expected_role=(
+                    "SI"
+                    if doc["id"] == email["current_si_id"]
+                    else "BL"
+                    if doc["id"] == email["current_bl_id"]
+                    else None
+                ),
+                document_id=doc["id"],
+            )
             for doc in docs
         ]
         snapshot = {
@@ -425,7 +463,9 @@ class Store:
     def list_samples(self, q="", category="", status="", page=1, limit=50):
         with self.connect() as db:
             self._recover_expired(db)
-            rows = db.execute("SELECT * FROM emails ORDER BY position,id").fetchall()
+            rows = db.execute(
+                "SELECT * FROM emails WHERE baseline_id IS NULL ORDER BY position,id"
+            ).fetchall()
             items = [self._summary(db, row) for row in rows]
             summary = {
                 "total": len(items),
@@ -488,6 +528,10 @@ class Store:
             )
             return {
                 **self._summary(db, email),
+                "baseline_id": email["baseline_id"],
+                "current_si_id": email["current_si_id"],
+                "current_bl_id": email["current_bl_id"],
+                "is_historical": False,
                 "body": email["body"],
                 "documents": public_docs,
                 "current_run": self._run(db, email["current_run_id"]),

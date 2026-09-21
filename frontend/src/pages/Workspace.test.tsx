@@ -420,3 +420,136 @@ describe('dataset mailbox journeys', () => {
     expect(screen.queryByRole('button', { name: 'Confirm candidate' })).not.toBeInTheDocument()
   })
 })
+
+function localTask(): SampleDetail {
+  return {
+    ...sample(),
+    id: 'task-copy',
+    baseline_id: 'email_test',
+    current_si_id: 'si',
+    current_bl_id: 'bl',
+  }
+}
+function taskApi(task = localTask()) {
+  return vi.fn(async (url: string, options?: RequestInit) => {
+    if (url === '/api/health')
+      return json({ capabilities: { development_tasks: true, development_extraction: false } })
+    if (url.startsWith('/api/v1/samples?')) return json(listing())
+    if (url.startsWith('/api/v1/dev/tasks?') && options?.method !== 'POST')
+      return json({ ...listing(), items: [task] })
+    if (url === '/api/v1/samples/email_test') return json(sample())
+    return json(task)
+  })
+}
+
+describe('local task revision journeys', () => {
+  it('clones a baseline and lists working copies even when standalone extraction is disabled', async () => {
+    const fetcher = taskApi()
+    vi.stubGlobal('fetch', fetcher)
+    const user = userEvent.setup()
+    const router = renderRoute('/tasks/email_test')
+    await user.click(await screen.findByRole('button', { name: 'Create working copy' }))
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/task-copy'))
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/v1/dev/tasks',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ sample_id: 'email_test' }),
+      }),
+    )
+    await act(async () => router.navigate('/inbox'))
+    expect(await screen.findByRole('heading', { name: 'Local working copies' })).toBeInTheDocument()
+    expect(
+      screen
+        .getAllByRole('link', { name: 'Please check the draft' })
+        .some((link) => link.getAttribute('href') === '/tasks/task-copy'),
+    ).toBe(true)
+  })
+
+  it('saves a revised source, analyzes its new revision and keeps it available after analysis submission fails', async () => {
+    const original = localTask()
+    const revised = { ...original, revision: 2, current_run: null, latest_run: null }
+    const base = taskApi(original)
+    const fetcher = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url.endsWith('/documents') && options?.method === 'POST') return json(revised)
+      if (url.endsWith('/analyze?wait=false'))
+        return json({ detail: { message: 'Service temporarily unavailable' } }, 503)
+      return base(url, options)
+    })
+    vi.stubGlobal('fetch', fetcher)
+    const user = userEvent.setup()
+    renderRoute('/tasks/task-copy')
+    await user.upload(
+      await screen.findByLabelText('Revised document'),
+      new File(['BL'], 'revised.txt', { type: 'text/plain' }),
+    )
+    await user.click(screen.getByRole('button', { name: 'Save source and recheck' }))
+    await screen.findByText(/Service temporarily unavailable/)
+    const upload = fetcher.mock.calls.find(([url]) => url.endsWith('/documents'))![1]!
+      .body as FormData
+    expect(upload.get('role')).toBe('bl')
+    expect(upload.get('expected_revision')).toBe('1')
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/v1/dev/tasks/task-copy/analyze?wait=false',
+      expect.objectContaining({ body: JSON.stringify({ expected_revision: 2 }) }),
+    )
+    expect(screen.getByText(/Local working copy · Revision 2/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Retry analysis' }))
+    expect(fetcher.mock.calls.filter(([url]) => url.endsWith('/documents'))).toHaveLength(1)
+  })
+
+  it('submits explicit pair selection and preserves actionable revision conflicts', async () => {
+    const base = taskApi()
+    const fetcher = vi.fn(async (url: string, options?: RequestInit) =>
+      url.endsWith('/pair')
+        ? json({ detail: { message: 'Stale revision' } }, 409)
+        : base(url, options),
+    )
+    vi.stubGlobal('fetch', fetcher)
+    const user = userEvent.setup()
+    renderRoute('/tasks/task-copy')
+    await user.click(await screen.findByText('Choose an existing SI / BL pair'))
+    await user.selectOptions(screen.getByLabelText('BL document'), '')
+    await user.click(screen.getByRole('button', { name: 'Save pair and recheck' }))
+    expect(
+      await screen.findByRole('button', { name: 'Refresh current revision' }),
+    ).toBeInTheDocument()
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/v1/dev/tasks/task-copy/pair',
+      expect.objectContaining({
+        body: JSON.stringify({ si_id: 'si', bl_id: null, expected_revision: 1 }),
+      }),
+    )
+    expect(fetcher.mock.calls.some(([url]) => url.endsWith('/analyze?wait=false'))).toBe(false)
+  })
+
+  it('opens a read-only historical run with deltas and prints only its bound sources', async () => {
+    const task = localTask()
+    task.is_historical = true
+    task.revision = 3
+    task.documents.push({
+      ...task.documents[1],
+      id: 'newer-bl',
+      filename: 'newer-source.pdf',
+      version: 3,
+    })
+    task.current_run!.result!.revision_delta = {
+      baseline_run_id: 'run-zero',
+      resolved: ['consignee', 'notify_party'],
+      persisting: [],
+      new: ['gross_weight_kg'],
+      uncertain: [],
+    }
+    vi.stubGlobal('fetch', taskApi(task))
+    const user = userEvent.setup()
+    renderRoute('/tasks/task-copy?run=run-1')
+    expect(await screen.findByText('Historical result · Read only')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Revised document')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Reanalyze' })).not.toBeInTheDocument()
+    expect(screen.getAllByText('Consignee, Notify party').length).toBeGreaterThan(0)
+    await user.click(screen.getByRole('button', { name: 'Print report' }))
+    expect(screen.getByText('Historical result · Not the current check')).toBeInTheDocument()
+    expect(screen.getByText(/Generated .*Source revision 1/)).toBeInTheDocument()
+    expect(screen.queryByText(/newer-source/)).not.toBeInTheDocument()
+  })
+})

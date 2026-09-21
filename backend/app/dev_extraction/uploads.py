@@ -7,9 +7,13 @@ from .dataset import DatasetError
 
 
 class LimitedUploadParser(MultiPartParser):
-    def __init__(self, request, file_limit: int):
+    def __init__(self, request, file_limit: int, *, max_fields: int = 1):
         super().__init__(
-            request.headers, request.stream(), max_files=1, max_fields=1, max_part_size=1024
+            request.headers,
+            request.stream(),
+            max_files=1,
+            max_fields=max_fields,
+            max_part_size=1024,
         )
         self.file_limit = file_limit
         self.file_bytes = 0

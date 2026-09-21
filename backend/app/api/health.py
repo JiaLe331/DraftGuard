@@ -19,6 +19,7 @@ def health(request: Request) -> HealthResponse:
     return HealthResponse(
         capabilities={
             "development_extraction": settings.dev_extraction_enabled,
+            "development_tasks": settings.app_env == "development",
             "upload_limit_bytes": settings.dev_upload_limit,
         }
     )

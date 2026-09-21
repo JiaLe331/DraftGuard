@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Link, useLocation, useSearchParams } from 'react-router'
 import {
   ArrowRightIcon,
@@ -102,6 +103,7 @@ export function Overview({ inbox = false }: { inbox?: boolean }) {
           </div>
         )}
       </div>
+      {inbox && <LocalTasks />}
       {!inbox && (
         <div className="stats-grid">
           {cards.map(({ key, label, caption, icon: Icon, color }) => (
@@ -334,5 +336,69 @@ function UploadLink({ from }: { from: string }) {
     <Link className="button primary" to={`/inbox/upload?from=${encodeURIComponent(from)}`}>
       <FileArrowUpIcon size={18} aria-hidden="true" /> Upload document
     </Link>
+  )
+}
+
+function LocalTasks() {
+  const { data } = useResource<Health>('/api/health')
+  return data?.capabilities?.development_tasks ? <LocalTaskList /> : null
+}
+function LocalTaskList() {
+  const [page, setPage] = useState(1)
+  const { data, error, reload } = useResource<SampleList>(`/api/v1/dev/tasks?page=${page}`)
+  return (
+    <section className="panel local-tasks">
+      <div className="panel-heading">
+        <div>
+          <h2>Local working copies</h2>
+          <p>Revised document checks saved on this development server.</p>
+        </div>
+        <button className="button compact" onClick={reload}>
+          Refresh working copies
+        </button>
+      </div>
+      {error ? (
+        <p role="alert">{error.message}</p>
+      ) : !data ? (
+        <p role="status">Loading working copies…</p>
+      ) : data.items.length === 0 ? (
+        <p>Open a sample and choose Create working copy to check revised sources.</p>
+      ) : (
+        <ul>
+          {data.items.map((task) => (
+            <li key={task.id}>
+              <Link to={`/tasks/${task.id}`} state={{ from: '/inbox' }}>
+                {task.subject}
+              </Link>
+              <span>Revision {task.revision}</span>
+              <StatusBadge status={task.workflow_state} />
+            </li>
+          ))}
+        </ul>
+      )}
+      {data && data.total > data.limit && (
+        <nav className="pagination" aria-label="Working copy pages">
+          <span>
+            Page {data.page} · {data.total} working copies
+          </span>
+          <div>
+            <button
+              className="button compact"
+              disabled={data.page <= 1}
+              onClick={() => setPage(page - 1)}
+            >
+              Previous working copies
+            </button>
+            <button
+              className="button compact"
+              disabled={data.page * data.limit >= data.total}
+              onClick={() => setPage(page + 1)}
+            >
+              Next working copies
+            </button>
+          </div>
+        </nav>
+      )}
+    </section>
   )
 }

@@ -126,7 +126,19 @@ Use **Reanalyze** to run the same pipeline on the stored immutable sources. It s
 
 **Print report** opens an in-page report preview using the same report component and table styling as printing. **Print / Save PDF** invokes the browser print dialog where supported. The report includes source versions, hashes, raw/normalized values, evidence, unresolved requirements, and the absence of human approval. The in-app browser may not expose a system print dialog; use a normal browser to print or save a PDF.
 
-The former hand-authored prototype and browser snapshots are no longer used. Human corrections, completion acknowledgment, uploaded replacements, and revision-delta review are later milestones; no fake controls are exposed for them.
+The former hand-authored prototype and browser snapshots are no longer used. Local tasks support source replacement and revision comparison as described below. Human corrections and completion acknowledgments remain future work.
+
+## Local task revisions
+
+Open a sample workspace and create a local task copy before changing sources. The sample's files and results remain intact. Copies retain email context and immutable source bytes, but their first analysis runs the real pipeline rather than copying predictions. Local tasks are available from Inbox and survive refreshes and backend restarts.
+
+In a local task, add or replace SI/BL files, or explicitly select the pair when attachments are ambiguous. A source change advances the task revision and automatically requests a full seven-field analysis. If analysis submission fails, the source revision remains saved and can be retried. Selecting a role does not override content-based document validation. Development uploads use the configured smaller upload limit, not the PRD's eventual cloud upload allowance.
+
+Revision changes compare against the saved prior-version baseline: resolved, persisting, new confirmed discrepancies, and fields that became uncertain. An uncertain field is never counted as resolved. Reanalyzing the same revision retains its comparison baseline. Results from older revisions stay historical and cannot replace the current result. The history selector opens the exact run's files, evidence, and report; a new revision without a successful result is not presented as a completed check.
+
+Try the primary scenario with `email_004` and the explicitly team-created fixtures under `backend/tests/fixtures/revisions/`: v2 fixes the two names but changes gross weight to `130,058 KG`; v3 restores `131,058 KG`. Process these through normal task upload. All-seven matches mean **Ready for review**, not approval. Human corrections, supplied information, and completion acknowledgments are not part of this milestone.
+
+This is a single local development workspace, not session-isolated cloud storage. Keep it bound to loopback. Production task routes, no-login session ownership, Gemini, and the public deployment gate remain separate work.
 
 ## Local extraction
 
@@ -180,6 +192,21 @@ Attachment buttons and **Open original** now open an in-page preview: original T
 | `GET /api/v1/samples/{id}` | Original email, current documents, latest attempt, last successful result, and run summaries |
 | `GET /api/v1/samples/{id}/documents/{document_id}/content` | Original registered source, checked against its content hash |
 | `POST /api/v1/dev/samples/{id}/analyze` | JSON `{"expected_revision":1}`; synchronous by default; `?wait=false` returns 202 with the saved mailbox detail and `latest_run.audit_run_id`; 409 for an active run or stale revision, 503 when busy |
+
+Local task endpoints (development only):
+
+| Endpoint | Behavior |
+|---|---|
+| `POST /api/v1/dev/tasks` | `{ "sample_id": "email_004" }`; creates a working copy with no copied analysis |
+| `GET /api/v1/dev/tasks` | Paginated local task list (`page`, `limit`) |
+| `GET /api/v1/dev/tasks/{id}` | Current task, active attachments, pair IDs, runs, and saved results |
+| `POST /api/v1/dev/tasks/{id}/documents` | Multipart `file`, `role` (`si`/`bl`), `expected_revision`; saves an immutable source and advances revision |
+| `POST /api/v1/dev/tasks/{id}/pair` | JSON `si_id`, `bl_id` (nullable), `expected_revision`; explicitly selects current attachments |
+| `POST /api/v1/dev/tasks/{id}/analyze` | JSON `expected_revision`; `?wait=false` uses existing bounded background execution |
+| `GET /api/v1/dev/tasks/{id}/runs/{run_id}` | Read-only snapshot with exact run sources, results, and historical designation |
+| `GET /api/v1/dev/tasks/{id}/documents/{document_id}/content` | Registered task source; `?download=true` downloads its immutable bytes |
+
+The UI requests analysis after a successful source/pair write. A write response alone does not claim an analysis succeeded. Stale writes return 409. `development_tasks` in health advertises availability independently of the optional standalone extraction UI.
 
 Interactive API documentation is at `/docs`. Local mailbox routes are registered **only when `APP_ENV=development`**. Other environments retain health but do not expose this unauthenticated local store. The PRD's public upload/save/read deployment gate remains outstanding.
 

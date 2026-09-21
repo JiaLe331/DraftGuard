@@ -2293,7 +2293,7 @@ button {
   width: min(960px, calc(100vw - 32px));
   max-height: calc(100dvh - 32px);
   padding: 0;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   border-radius: 16px;
   color: var(--text);
   background: white;
@@ -2654,5 +2654,104 @@ button {
 @media (prefers-reduced-motion: reduce) {
   .analysis-activity .analysis-caption {
     animation: none;
+  }
+}
+
+.task-sources,
+.revision-changes,
+.local-tasks {
+  padding: 24px;
+  margin-bottom: 20px;
+}
+.task-sources p,
+.revision-changes p,
+.local-tasks p {
+  color: var(--muted);
+  margin: 8px 0 16px;
+}
+.task-sources fieldset {
+  border: 0;
+  padding: 0;
+  margin: 16px 0;
+  display: flex;
+  gap: 16px;
+  align-items: end;
+  flex-wrap: wrap;
+}
+.task-sources legend {
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.task-sources label,
+.history-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.task-sources select,
+.task-sources input,
+.history-selector select {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  max-width: 100%;
+  min-width: 0;
+}
+.task-sources details {
+  margin-top: 16px;
+}
+.revision-changes dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+.revision-changes dt {
+  font-weight: 600;
+}
+.revision-changes dd {
+  margin: 8px 0 0;
+}
+.history-selector {
+  margin: 20px 0;
+}
+.local-tasks ul {
+  padding: 0;
+  list-style: none;
+}
+.local-tasks li {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.local-tasks li a {
+  flex: 1;
+  min-width: 160px;
+}
+@media (max-width: 640px) {
+  .task-sources fieldset {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .revision-changes dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media print {
+  .print-report .revision-changes {
+    margin: 16px 0;
+    padding: 0;
+    border: 0;
+    break-inside: avoid;
+  }
+  .print-report .revision-changes dl {
+    display: block;
+  }
+  .print-report .revision-changes dl > div {
+    margin-bottom: 8px;
   }
 }

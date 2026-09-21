@@ -19,6 +19,7 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
       const body = await response.json().catch(() => null)
       throw new ApiError(
         body?.detail?.message ??
+          body?.error?.message ??
           ([502, 503, 504].includes(response.status)
             ? 'The backend is unavailable. Check that it is running, then retry.'
             : `Request failed (${response.status}).`),
@@ -33,8 +34,11 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
     )
   }
 }
+export function taskPath(id: string) {
+  return `/api/v1/${id.startsWith('task-') ? 'dev/tasks' : 'samples'}/${encodeURIComponent(id)}`
+}
 export function documentUrl(emailId: string, documentId: string, page?: number) {
-  return `${apiBase}/api/v1/samples/${encodeURIComponent(emailId)}/documents/${encodeURIComponent(documentId)}/content${page ? `#page=${page}` : ''}`
+  return `${apiBase}${taskPath(emailId)}/documents/${encodeURIComponent(documentId)}/content${page ? `#page=${page}` : ''}`
 }
 export function useResource<T>(path: string) {
   const [attempt, setAttempt] = useState(0)

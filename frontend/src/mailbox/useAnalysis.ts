@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { request } from './api'
+import { request, taskPath } from './api'
 import type { SampleDetail } from './types'
 
 export type AnalysisPhase = 'idle' | 'running' | 'preparing' | 'revealed' | 'failed'
@@ -39,9 +39,10 @@ export function useAnalysis(initial: SampleDetail, refresh: () => void) {
     }
   }, [])
 
-  async function analyze() {
+  async function analyze(source: SampleDetail = task) {
     if (locked.current) return
     locked.current = true
+    setTask(source)
     setError('')
     setSavedResult(null)
     setPhase('running')
@@ -49,11 +50,11 @@ export function useAnalysis(initial: SampleDetail, refresh: () => void) {
     controller.current = new AbortController()
     try {
       let next = await request<SampleDetail>(
-        `/api/v1/dev/samples/${encodeURIComponent(task.id)}/analyze?wait=false`,
+        `${source.id.startsWith('task-') ? taskPath(source.id) : `/api/v1/dev/samples/${encodeURIComponent(source.id)}`}/analyze?wait=false`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ expected_revision: task.revision }),
+          body: JSON.stringify({ expected_revision: source.revision }),
           signal: controller.current.signal,
         },
       )
@@ -73,7 +74,7 @@ export function useAnalysis(initial: SampleDetail, refresh: () => void) {
           signal.addEventListener('abort', abort, { once: true })
         })
         if (!mounted.current) return
-        next = await request<SampleDetail>(`/api/v1/samples/${encodeURIComponent(task.id)}`, {
+        next = await request<SampleDetail>(taskPath(source.id), {
           signal,
         })
         if (!mounted.current) return

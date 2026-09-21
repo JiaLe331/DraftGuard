@@ -1,7 +1,7 @@
 """Mailbox stages around the common extraction workers and persisted event stream."""
 
 from app.dev_extraction.dataset import DatasetError
-from app.documents.analysis import PIPELINE_VERSION, classify, compare
+from app.documents.analysis import PIPELINE_VERSION, classify, compare, revision_delta
 
 
 class MailboxWorkflow:
@@ -29,7 +29,21 @@ class MailboxWorkflow:
 
     def finish(self, run, emit):
         run["processing_status"] = "RUNNING"
-        result = compare(run["classification"], run["documents"], emit)
+        pair = None
+        if self.email.get("baseline_id"):
+            pair = {
+                role: self.email[f"current_{role}_id"]
+                for role in ("si", "bl")
+                if self.email.get("pair_selected") or self.email[f"current_{role}_id"] is not None
+            }
+        result = compare(run["classification"], run["documents"], emit, selected_pair=pair)
+        if self.email.get("baseline_id"):
+            baseline_id = self.email.get("baseline_run_id")
+            with self.store.connect() as db:
+                baseline = self.store._run(db, baseline_id)
+            result["revision_delta"] = revision_delta(
+                result, baseline["result"] if baseline else None, baseline_id
+            )
         run["analysis"] = result
         # An unreadable source is a completed analysis requiring review. A failed
         # worker/read is a processing failure and must retain the last successful result.
@@ -70,12 +84,13 @@ class MailboxWorkflow:
         ).fetchone()
         active = db.execute("SELECT status FROM mailbox.runs WHERE id=?", (self.run_id,)).fetchone()
         success = run["processing_status"] == "SUCCEEDED"
-        if success and (
+        stale = (
             not current
             or current["revision"] != self.email["revision"]
             or current["latest_run_id"] != self.run_id
             or active["status"] != "RUNNING"
-        ):
+        )
+        if success and stale and not self.email.get("baseline_id"):
             raise DatasetError("stale_run", "This result is no longer current.", 409)
         errors = [*run["issues"], *(d["error"] for d in run["documents"] if d["error"])]
         error = (
@@ -101,7 +116,26 @@ class MailboxWorkflow:
                 self.run_id,
             ),
         )
-        if success:
+        if success and self.email.get("baseline_id") and not self.email.get("pair_selected"):
+            pair = {}
+            for role in ("si", "bl"):
+                options = [
+                    doc["id"] for doc in (result or {}).get("documents", []) if doc["role"] == role
+                ]
+                pair[role] = self.email.get(f"current_{role}_id") or (
+                    options[0] if len(options) == 1 else None
+                )
+            db.execute(
+                "UPDATE mailbox.runs SET current_si_id=?,current_bl_id=? WHERE id=?",
+                (pair["si"], pair["bl"], self.run_id),
+            )
+            if not stale:
+                db.execute(
+                    "UPDATE mailbox.emails SET current_si_id=?,current_bl_id=?,pair_selected=? "
+                    "WHERE id=?",
+                    (pair["si"], pair["bl"], int(all(pair.values())), self.email["id"]),
+                )
+        if success and not stale:
             db.execute(
                 "UPDATE mailbox.emails SET current_run_id=? WHERE id=?",
                 (self.run_id, self.email["id"]),

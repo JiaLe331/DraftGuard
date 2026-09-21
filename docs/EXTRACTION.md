@@ -1,11 +1,12 @@
 # Local document extraction
 
-This milestone implements rule-based extraction from one TXT, PDF, DOCX, or XLSX
+This milestone implements rule-first extraction from one TXT, PDF, DOCX, or XLSX
 document. It returns seven shipment fields with original values, canonical values,
 source evidence, and review issues. A development API connects that extractor to
-Inbox uploads, dataset emails, and SQLite audit history.
-The Inbox also uses this shared extractor inside its email classification and SI/BL
-comparison workflow. OCR, Gemini, and live mailbox connections remain future work.
+Inbox uploads, dataset emails, and SQLite audit history. Valid PDFs with no usable
+text can use the server-side Gemini adapter for visual candidates; those candidates
+remain unverified until a human confirms or corrects them. There is no OCR/text
+fallback, paired-document backfill, live mailbox connection, or automatic completion.
 
 ## Try it in the browser (no Docker needed)
 
@@ -67,8 +68,10 @@ audit screen. Saved `/extraction/runs/:runId` links still open their original re
 
 Try `email_055` for XLSX/DOCX evidence and the SI's `MISSING_WEIGHT_UNIT` issue;
 try `email_516` for a missing SI weight which remains missing despite the BL value.
-`email_512` includes an image-only PDF and needs visual review. Inbox classifies
-emails without attachments and reports missing documents when a comparison was requested.
+`email_512` includes separate image-only SI and BL PDFs. With no key it ends in
+`AI_NOT_CONFIGURED` without candidates. With Gemini configured, each PDF is sent in
+its own request and returns seven source-specific candidates for page-level review.
+Inbox classifies emails without attachments and reports missing documents when a comparison was requested.
 The direct dataset extraction API still supports explicit **No attachments** results.
 
 Extraction finished means the processing completed. **Needs review** means one or
@@ -103,8 +106,10 @@ exhausted shared capacity returns retryable 503.
 
 Classification rules and the seven-field comparison workflow are retained. Only
 emails classified for BL comparison extract/compare their attachments; other
-categories record classification and explicit skipped steps. No OCR or Gemini
-step is fabricated for unreadable PDFs. Missing values/units remain unresolved.
+categories record classification and explicit skipped steps. Gemini is considered
+only for a valid PDF whose parser returns `NO_USABLE_TEXT`; malformed, encrypted,
+oversized, or readable documents are never sent to the vision provider. Missing
+values and units remain unresolved.
 
 New analyses use `mailbox-shared-2` and the exact shared document contract. Earlier
 mailbox results remain readable with `audit_run_id: null` and no invented events;
@@ -131,6 +136,9 @@ is not a crash-proof distributed or production ledger.
 | `DEV_REQUEST_LIMIT` | 4 MiB per development POST request, counted while receiving |
 | `DEV_DOCUMENT_TIMEOUT` | 15 seconds per extraction worker |
 | `DEV_RUN_TIMEOUT` | 60 seconds for processing an email run |
+| `GEMINI_API_KEY` | Empty; server-side only, required with `GEMINI_MODEL` for scan candidates |
+| `GEMINI_MODEL` | Empty; must be an explicit model ID, with no code default or automatic upgrade |
+| `GEMINI_TIMEOUT_SECONDS` | 30 seconds per provider call; capped below the local run deadline |
 
 Use absolute paths for path overrides, for example
 `DATASET_DIR="D:/Ash Stuff/Coding/2026 Averis Monash/sdoc-hackathon-bundle"`.
@@ -192,6 +200,7 @@ Interactive request forms are at [API docs](http://127.0.0.1:8000/docs).
 | `GET /api/v1/dev/runs/{run_id}/events?after_sequence=0&limit=100` | Ordered event page, continuation cursor, terminal status, and live/legacy trace mode |
 | `GET /api/v1/dev/runs/{run_id}` | Full saved run, documents, extraction results, and events; `?download=true` downloads the audit JSON |
 | `GET /api/v1/dev/runs/{run_id}/documents/{document_id}/original` | Exact original; `?disposition=inline` allows validated PDFs inline |
+| `POST /api/v1/dev/tasks/{task_id}/reviews` | Append a current-run visual `CONFIRM_CANDIDATE` or `CORRECT_EXTRACTION` event and return full task detail |
 
 Both POST extraction endpoints accept `?wait=false`: HTTP 202 returns the saved
 initial run (including `run_id`) once processing has been scheduled. Uploaded bytes
@@ -251,6 +260,35 @@ use its default `wait=True` from a worker thread for synchronous integration. `e
 does not write history. Its optional `observer` callback receives real processing
 events; the API worker uses that callback to record the audit.
 
+### Visual review overlay
+
+The saved run's `result` is immutable machine output. Public task runs also expose
+`reviewed_result`, `review_actions`, and `review_progress`. Review events are
+append-only and bound to `task_id + revision + run_id + document_id + field`.
+`CONFIRM_CANDIDATE` uses the server-side machine value and candidate page;
+`CORRECT_EXTRACTION` requires a nonempty visible value and a real page in the same
+PDF. Old revisions, historical runs, non-current documents, and baseline samples
+cannot be written.
+
+```json
+{
+  "expected_revision": 1,
+  "run_id": "run-id",
+  "document_id": "document-id",
+  "field": "shipper",
+  "action": "CORRECT_EXTRACTION",
+  "raw_value": "Visible value from the source",
+  "evidence": { "page": 1 }
+}
+```
+
+One reviewed side does not establish a comparison. Both SI and BL must be present
+and reviewed before the deterministic rules produce `MATCH` or `MISMATCH` and add
+to coverage. A missing candidate cannot be confirmed as missing, but it can be
+corrected when the reviewer sees a value. Later actions change the displayed overlay
+without deleting earlier events. All visual candidates can lead to `READY` or
+`DISCREPANCIES_FOUND`, never `CHECK_COMPLETE`.
+
 ## Setup and local command
 
 Use the repository's Python 3.12 and uv setup. From `DraftGuard/backend`:
@@ -306,9 +344,12 @@ their public messages.
 
 Each field follows PRD section 8.2: `field`, `raw_value`, `normalized_value`,
 `value_state`, `method`, `requires_human_confirmation`, and `evidence`. Numeric
-canonical values are strings, never binary floating-point results. This pipeline
-uses `method="rule"`. The confirmation flag is false: uncertainty requires an
-appropriate correction or replacement, not a fabricated visual candidate.
+canonical values are strings, never binary floating-point results. Rule-readable
+documents use `method="rule"`. Visual candidates use `method="gemini_vision"`,
+`requires_human_confirmation=true`, and
+`verification_source="ai_visual_candidate"`. A human correction is normalized by
+the same deterministic rules and becomes `method="human"`; it does not mutate the
+machine result.
 
 An issue includes a stable `code`, message, next action, optional field, and
 challenge reason. Missing labels mean "not located by these rules", not proof
@@ -317,11 +358,12 @@ There is no task completion or match status in an extraction response.
 
 ## Source evidence
 
-Every evidence object identifies its document and source `unit_id`, copies an
-original excerpt from that unit, and retains its locator. `verified=true` means
-the excerpt comes directly from the retained source unit; it does not certify
-that a PDF's hidden text layer matches its visible image or that the business value
-is correct.
+Every evidence object identifies its document and source `unit_id` and retains its
+locator. `verification_source="source_text"` with `verified=true` means an excerpt
+was checked against the retained text unit. `ai_visual_candidate` is an unverified
+model excerpt anchored to a real page; it is never presented as PDF text-layer
+evidence. `human_visual` records the page selected for a correction. None of these
+states is a completion acknowledgment.
 
 All numeric locations start at 1:
 
@@ -377,9 +419,11 @@ remain ambiguous.
 - Workbook formulas are not evaluated and their cached values are not trusted.
   External-link loading is disabled. Formula candidates require a literal,
   authoritative replacement source.
-- PDF extraction reads its text layer; there is no OCR or vision call. Empty or
-  image-only PDFs return `NO_USABLE_TEXT` and a visual-review requirement, not
-  successful fields. No claim is made that an empty text layer proves a scan.
+- PDF extraction reads its text layer first. Only a valid PDF with
+  `NO_USABLE_TEXT` may enter Gemini vision. SI and BL bytes are sent separately with
+  strict seven-field/role/page schema validation and no SDK retry. A candidate does
+  not affect comparison coverage until reviewed. No claim is made that an empty
+  text layer proves a scan.
 - Word extraction covers body paragraphs/tables, not headers, footers, floating
   text boxes, or tracked-change content. Arbitrary complex layouts may require
   review or a clearer source.
@@ -414,8 +458,8 @@ uv run --frozen ruff format --check .
 uv run --frozen pytest
 ```
 
-Tests include organizer fixtures for all four formats and an actual image-only
-PDF, plus explicitly team-created in-memory edge cases. Assertions cover source
+Tests include organizer fixtures for all four formats and actual image-only PDFs,
+plus an injected fake vision provider and explicitly team-created edge cases. Assertions cover source
 locators, missing values, exact normalization, role detection, conflicts, formulas,
 malformed/encrypted inputs, resource limits, and CLI output/exit codes. No runtime
 module imports fixtures, reads ground truth, or branches on an email ID.
@@ -425,4 +469,7 @@ per-attachment failures, request limits during reception, timeouts, dataset path
 containment, feature gating, and CORS. From `frontend/`, run `pnpm test`, `pnpm lint`,
 `pnpm typecheck`, `pnpm format:check`, and `pnpm build`. Frontend tests cover dataset
 selection, multipart upload, duplicate submissions, source evidence, history, and
-failed saves. The browser workflow above exercises the actual API and supplied files.
+failed saves. Vision tests cover separate calls, strict response/page/role checks,
+provider metadata and error mapping, immutable machine results, partial/full review,
+corrections, stale writes, and restart recovery without a Gemini key. The browser
+workflow above exercises the actual API and supplied files.

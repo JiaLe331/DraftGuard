@@ -1200,5 +1200,6 @@ describe('local task revision journeys', () => {
     renderRoute('/tasks/email_test')
     await screen.findByRole('heading', { name: 'Please check the draft' })
     expect(screen.queryByRole('button', { name: /amendment email/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Explain with Gemini' })).not.toBeInTheDocument()
   })
 })

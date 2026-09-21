@@ -471,7 +471,7 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
               <span>{result?.known_defect_fields.length ?? 0} discrepancies</span>
               <span>{fields.filter((f) => f.finding === 'NEEDS_REVIEW').length} need review</span>
             </div>
-            {!task.is_historical && (
+            {localTask && !task.is_historical && (
               <RiskBriefing
                 key={`${task.id}-${task.revision}`}
                 taskId={task.id}

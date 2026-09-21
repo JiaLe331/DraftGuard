@@ -94,6 +94,7 @@ def test_api_pagination_search_global_counts_content_and_production_gate(tmp_pat
     )
     store = Store(settings.local_data_dir)
     store.import_dataset(root)
+    detail = store.analyze("email_000", 1)
     with TestClient(create_app(settings)) as client:
         page = client.get("/api/v1/samples?limit=2&page=2&q=email_002").json()
         assert page["total"] == 1 and page["items"] == []
@@ -101,7 +102,8 @@ def test_api_pagination_search_global_counts_content_and_production_gate(tmp_pat
         response = client.post(
             "/api/v1/dev/samples/email_000/analyze", json={"expected_revision": 1}
         )
-        detail = response.json()
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "sample_read_only"
         assert detail["workflow_state"] == "READY"
         content = f"/api/v1/samples/email_000/documents/{detail['documents'][0]['id']}/content"
         expected = (root / "attachments/email_000_SI.txt").read_bytes()

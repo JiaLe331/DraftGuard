@@ -28,9 +28,20 @@ def mailbox(tmp_path):
         yield client, application, settings, root
 
 
+def task_id(client, email="email_000"):
+    tasks = getattr(client, "draftguard_tasks", {})
+    if email not in tasks:
+        response = client.post("/api/v1/dev/tasks", json={"sample_id": email})
+        assert response.status_code == 200, response.text
+        tasks[email] = response.json()["id"]
+        client.draftguard_tasks = tasks
+    return tasks[email]
+
+
 def start(client, email="email_000", wait=False):
+    task = task_id(client, email)
     response = client.post(
-        f"/api/v1/dev/samples/{email}/analyze?wait={str(wait).lower()}",
+        f"/api/v1/dev/tasks/{task}/analyze?wait={str(wait).lower()}",
         json={"expected_revision": 1},
     )
     assert response.status_code == (200 if wait else 202), response.text
@@ -38,7 +49,7 @@ def start(client, email="email_000", wait=False):
 
 
 def finished(client, email="email_000"):
-    detail = client.get(f"/api/v1/samples/{email}").json()
+    detail = client.get(f"/api/v1/dev/tasks/{task_id(client, email)}").json()
     return detail if detail["latest_run"]["status"] != "RUNNING" else None
 
 
@@ -80,7 +91,7 @@ def test_mailbox_uses_identical_extraction_contract_and_originals(mailbox):
     before = deepcopy(audit)
     start(client, wait=True)
     assert client.get(f"/api/v1/dev/runs/{audit['run_id']}").json() == before
-    assert len(app.state.mailbox_store.detail("email_000")["runs"]) == 2
+    assert len(app.state.mailbox_store.task_detail(task_id(client))["runs"]) == 2
 
 
 def test_live_mailbox_events_share_capacity_and_survive_refresh(mailbox, monkeypatch, tmp_path):
@@ -92,10 +103,12 @@ def test_live_mailbox_events_share_capacity_and_survive_refresh(mailbox, monkeyp
         page = eventually(lambda: has_candidates(client, audit_id))
         assert page["processing_status"] == "RUNNING"
         assert (
-            client.get("/api/v1/samples/email_000").json()["latest_run"]["audit_run_id"] == audit_id
+            client.get(f"/api/v1/dev/tasks/{task_id(client)}").json()["latest_run"]["audit_run_id"]
+            == audit_id
         )
         duplicate = client.post(
-            "/api/v1/dev/samples/email_000/analyze?wait=false", json={"expected_revision": 1}
+            f"/api/v1/dev/tasks/{task_id(client)}/analyze?wait=false",
+            json={"expected_revision": 1},
         )
         assert duplicate.status_code == 409
         second = client.post(
@@ -104,7 +117,8 @@ def test_live_mailbox_events_share_capacity_and_survive_refresh(mailbox, monkeyp
         )
         assert second.status_code == 202
         busy = client.post(
-            "/api/v1/dev/samples/email_001/analyze?wait=false", json={"expected_revision": 1}
+            f"/api/v1/dev/tasks/{task_id(client, 'email_001')}/analyze?wait=false",
+            json={"expected_revision": 1},
         )
         assert busy.status_code == 503
         assert busy.json()["detail"]["code"] == "EXTRACTION_BUSY"
@@ -131,9 +145,11 @@ def test_failed_terminal_save_rolls_back_mailbox_success(mailbox, monkeypatch):
         return save(run, records, original, commit=commit)
 
     monkeypatch.setattr(app.state.audit_store, "save", fail_completion)
-    response = client.post("/api/v1/dev/samples/email_000/analyze", json={"expected_revision": 1})
+    response = client.post(
+        f"/api/v1/dev/tasks/{task_id(client)}/analyze", json={"expected_revision": 1}
+    )
     assert response.status_code == 503
-    detail = client.get("/api/v1/samples/email_000").json()
+    detail = client.get(f"/api/v1/dev/tasks/{task_id(client)}").json()
     assert detail["current_run"] == original
     assert detail["latest_run"]["status"] == "FAILED"
     assert detail["latest_run"]["error"]["code"] == "AUDIT_SAVE_FAILED"
@@ -199,10 +215,11 @@ def test_shutdown_interrupts_mailbox_and_preserves_recorded_prefix(tmp_path, mon
     try:
         with TestClient(application) as client:
             detail = start(client)
+            saved_task_id = task_id(client)
             audit_id = detail["latest_run"]["audit_run_id"]
             prefix = eventually(lambda: has_candidates(client, audit_id))["items"]
         with TestClient(create_app(settings)) as client:
-            detail = client.get("/api/v1/samples/email_000").json()
+            detail = client.get(f"/api/v1/dev/tasks/{saved_task_id}").json()
             assert detail["latest_run"]["status"] == "FAILED"
             assert detail["current_run"] is None
             assert len(detail["runs"]) == 1

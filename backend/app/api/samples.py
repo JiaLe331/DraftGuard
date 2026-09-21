@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.config import Settings
@@ -58,9 +58,40 @@ def build_router(settings: Settings, store: Store) -> APIRouter:
     def detail(email_id: str):
         return run(lambda: store.detail(email_id))
 
+    @router.get("/records/{record_id}")
+    def record_detail(record_id: str):
+        """Resolve a local record without inferring its kind from its identifier."""
+        return run(lambda: store.detail(record_id))
+
+    @router.get("/records/{record_id}/runs/{run_id}")
+    def record_run(record_id: str, run_id: str):
+        return run(lambda: store.task_run_detail(record_id, run_id))
+
     @router.get("/samples/{email_id}/documents/{document_id}/content")
     def content(email_id: str, document_id: str, download: bool = False):
         doc, path = run(lambda: store.get_document(email_id, document_id))
+        media_type = {
+            ".pdf": "application/pdf",
+            ".txt": "text/plain; charset=utf-8",
+            ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        }[Path(doc["filename"]).suffix.lower()]
+        return FileResponse(
+            path,
+            filename=doc["filename"],
+            media_type=media_type,
+            content_disposition_type="inline"
+            if not download and media_type.startswith(("application/pdf", "text/plain"))
+            else "attachment",
+            headers={
+                "X-Content-Type-Options": "nosniff",
+                "Content-Security-Policy": "frame-ancestors 'self'",
+            },
+        )
+
+    @router.get("/records/{record_id}/documents/{document_id}/content")
+    def record_content(record_id: str, document_id: str, download: bool = False):
+        doc, path = run(lambda: store.get_document(record_id, document_id))
         media_type = {
             ".pdf": "application/pdf",
             ".txt": "text/plain; charset=utf-8",
@@ -87,11 +118,15 @@ def build_router(settings: Settings, store: Store) -> APIRouter:
             raise HTTPException(
                 403, detail={"code": "origin_denied", "message": "This origin is not allowed."}
             )
-        result = run(
-            lambda: store.analyze(
-                email_id, payload.expected_revision, request_id=request.state.request_id, wait=wait
-            )
+        run(lambda: store.detail(email_id))
+        raise HTTPException(
+            409,
+            detail={
+                "code": "sample_read_only",
+                "message": "Create a local working copy before running a new analysis.",
+                "retryable": False,
+                "request_id": request.state.request_id,
+            },
         )
-        return JSONResponse(result, status_code=200 if wait else 202)
 
     return router

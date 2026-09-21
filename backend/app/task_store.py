@@ -15,7 +15,7 @@ class TaskStoreMixin:
         from app.store import StoreError
 
         task = self._email(db, task_id)
-        if not task["baseline_id"]:
+        if task["record_kind"] != "task":
             raise StoreError("not_found", "This local task could not be found.", 404)
         if expected_revision is not None and task["revision"] != expected_revision:
             raise StoreError("stale_revision", "The sources changed. Refresh before saving.", 409)
@@ -30,7 +30,7 @@ class TaskStoreMixin:
         with self.connect() as db:
             self._recover_expired(db)
             rows = db.execute(
-                "SELECT * FROM emails WHERE baseline_id IS NOT NULL ORDER BY rowid DESC"
+                "SELECT * FROM emails WHERE record_kind='task' ORDER BY rowid DESC"
             ).fetchall()
             items = [{**self._summary(db, row), "baseline_id": row["baseline_id"]} for row in rows]
         states = {}
@@ -56,7 +56,7 @@ class TaskStoreMixin:
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             baseline = self._email(db, sample_id)
-            if baseline["baseline_id"]:
+            if baseline["record_kind"] != "sample":
                 raise StoreError("invalid_sample", "Create a task from an organizer sample.")
             docs = self._documents(db, baseline)
             mapping = {doc["id"]: str(uuid4()) for doc in docs}
@@ -73,8 +73,8 @@ class TaskStoreMixin:
                         pair[role] = mapping[candidates[0]]
             db.execute(
                 "INSERT INTO emails (id,subject,sender,body,position,revision,fingerprint,"
-                "document_ids,baseline_id,current_si_id,current_bl_id,pair_selected) "
-                "VALUES (?,?,?,?,?,1,?,?,?,?,?,?)",
+                "document_ids,baseline_id,current_si_id,current_bl_id,pair_selected,record_kind) "
+                "VALUES (?,?,?,?,?,1,?,?,?,?,?,?,'task')",
                 (
                     task_id,
                     baseline["subject"],
@@ -104,6 +104,19 @@ class TaskStoreMixin:
                         now(),
                     ),
                 )
+        return self.task_detail(task_id)
+
+    def create_custom_task(self, subject, sender, body):
+        from app.store import encode
+
+        task_id = f"task-{uuid4().hex}"
+        with self.connect() as db:
+            db.execute(
+                "INSERT INTO emails "
+                "(id,subject,sender,body,position,revision,fingerprint,document_ids,record_kind) "
+                "VALUES (?,?,?,?,?,1,?,?,'task')",
+                (task_id, subject, sender, body, -1, task_id, encode([])),
+            )
         return self.task_detail(task_id)
 
     def _advance_task(self, db, task, document_ids, si_id, bl_id):

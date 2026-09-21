@@ -60,13 +60,11 @@ def task_client(tmp_path):
         dev_audit_db=tmp_path / "audit.sqlite3",
         _env_file=None,
     )
-    Store(settings.local_data_dir).import_dataset(source)
+    store = Store(settings.local_data_dir)
+    store.import_dataset(source)
+    baseline = store.analyze("email_004", 1)
     with TestClient(create_app(settings)) as client:
-        baseline = client.post(
-            "/api/v1/dev/samples/email_004/analyze", json={"expected_revision": 1}
-        )
-        assert baseline.status_code == 200, baseline.text
-        yield client, settings, baseline.json()
+        yield client, settings, baseline
 
 
 def clone(client, sample_id="email_004"):
@@ -122,6 +120,76 @@ def test_clone_preserves_baseline_and_copies_sources_without_machine_results(tas
     assert not {d["id"] for d in task["documents"]} & {d["id"] for d in baseline["documents"]}
     analyze(client, task)
     assert client.get("/api/v1/samples/email_004").json() == baseline
+
+
+def test_custom_task_and_record_kind_are_explicit(task_client):
+    client, _, _ = task_client
+    response = client.post(
+        f"{PREFIX}/custom",
+        json={
+            "subject": "  New document check  ",
+            "sender": " reviewer@example.test ",
+            "body": " Compare the attached shipping documents. ",
+        },
+    )
+    assert response.status_code == 200, response.text
+    task = response.json()
+    assert task["record_kind"] == "task"
+    assert task["baseline_id"] is None
+    assert task["subject"] == "New document check"
+    assert task["documents"] == []
+    assert any(item["id"] == task["id"] for item in client.get(PREFIX).json()["items"])
+    sample = client.get("/api/v1/samples/email_004").json()
+    assert sample["record_kind"] == "sample"
+    read_only = client.post("/api/v1/dev/samples/email_004/analyze", json={"expected_revision": 1})
+    assert read_only.status_code == 409
+    assert read_only.json()["detail"]["code"] == "sample_read_only"
+    blank = client.post(f"{PREFIX}/custom", json={"subject": " ", "sender": "x", "body": "body"})
+    assert blank.status_code == 422
+
+
+def test_rule_extraction_can_be_corrected_against_current_source_unit(task_client):
+    client, _, _ = task_client
+    task = analyze(client, clone(client))
+    run = task["current_run"]
+    document = next(item for item in run["result"]["documents"] if item["role"] == "si")
+    source = next(item for item in document["units"] if "APRIL FAR EAST" in item["text"])
+    corrected_value = "APRIL FAR EAST (M) SDN BHD"
+    corrected = client.post(
+        f"{PREFIX}/{task['id']}/reviews",
+        json={
+            "expected_revision": task["revision"],
+            "run_id": run["id"],
+            "document_id": document["id"],
+            "field": "shipper",
+            "action": "CORRECT_EXTRACTION",
+            "raw_value": corrected_value,
+            "evidence": {"kind": "source_unit", "unit_id": source["unit_id"]},
+        },
+    )
+    assert corrected.status_code == 200, corrected.text
+    reviewed = next(
+        item
+        for item in corrected.json()["current_run"]["reviewed_result"]["fields"]
+        if item["key"] == "shipper"
+    )
+    assert reviewed["si"]["method"] == "human"
+    assert reviewed["si"]["evidence"][0]["verified"] is True
+    assert corrected.json()["current_run"]["result"] == run["result"]
+
+    forged = client.post(
+        f"{PREFIX}/{task['id']}/reviews",
+        json={
+            "expected_revision": task["revision"],
+            "run_id": run["id"],
+            "document_id": document["id"],
+            "field": "shipper",
+            "action": "CORRECT_EXTRACTION",
+            "raw_value": "NOT PRESENT IN SOURCE LTD",
+            "evidence": {"kind": "source_unit", "unit_id": source["unit_id"]},
+        },
+    )
+    assert forged.status_code == 422
 
 
 def test_real_v1_v2_v3_deltas_reruns_history_and_persistence(task_client):

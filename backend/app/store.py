@@ -56,7 +56,8 @@ class Store(TaskStoreMixin):
                     id TEXT PRIMARY KEY, subject TEXT NOT NULL, sender TEXT NOT NULL,
                     body TEXT NOT NULL, position INTEGER NOT NULL, revision INTEGER NOT NULL,
                     fingerprint TEXT NOT NULL, document_ids TEXT NOT NULL,
-                    current_run_id TEXT, latest_run_id TEXT
+                    current_run_id TEXT, latest_run_id TEXT,
+                    record_kind TEXT NOT NULL DEFAULT 'sample'
                 );
                 CREATE TABLE IF NOT EXISTS documents (
                     id TEXT PRIMARY KEY, email_id TEXT NOT NULL REFERENCES emails(id),
@@ -138,6 +139,7 @@ class Store(TaskStoreMixin):
                     "current_si_id": "TEXT",
                     "current_bl_id": "TEXT",
                     "pair_selected": "INTEGER NOT NULL DEFAULT 0",
+                    "record_kind": "TEXT NOT NULL DEFAULT 'sample'",
                 },
                 "runs": {
                     "baseline_run_id": "TEXT",
@@ -149,6 +151,7 @@ class Store(TaskStoreMixin):
                 for column, definition in columns.items():
                     if column not in existing:
                         db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+            db.execute("UPDATE emails SET record_kind='task' WHERE baseline_id IS NOT NULL")
             # Leave time for the shared 60s run deadline and final persistence.
             cutoff = (datetime.now(UTC) - timedelta(seconds=120)).isoformat()
             db.execute(
@@ -476,10 +479,12 @@ class Store(TaskStoreMixin):
                 )
             self._check_not_running(db, email)
             docs = self._documents(db, email)
-            if email["baseline_id"] and email["pair_selected"]:
+            if email["record_kind"] == "task" and email["pair_selected"]:
                 pair_ids = {email["current_si_id"], email["current_bl_id"]}
                 docs = [doc for doc in docs if doc["id"] in pair_ids]
-            baseline_run_id = self._revision_baseline(db, email) if email["baseline_id"] else None
+            baseline_run_id = (
+                self._revision_baseline(db, email) if email["record_kind"] == "task" else None
+            )
             db.execute(
                 "INSERT INTO runs (id,email_id,revision,document_ids,pipeline_version,mode,"
                 "status,started_at) VALUES (?,?,?,?,?,?,'RUNNING',?)",
@@ -561,6 +566,7 @@ class Store(TaskStoreMixin):
             state = latest["status"]
         return {
             "id": email["id"],
+            "record_kind": email["record_kind"],
             "subject": email["subject"],
             "sender": email["sender"],
             "revision": email["revision"],
@@ -577,7 +583,7 @@ class Store(TaskStoreMixin):
         with self.connect() as db:
             self._recover_expired(db)
             rows = db.execute(
-                "SELECT * FROM emails WHERE baseline_id IS NULL ORDER BY position,id"
+                "SELECT * FROM emails WHERE record_kind='sample' ORDER BY position,id"
             ).fetchall()
             items = [self._summary(db, row) for row in rows]
             summary = {

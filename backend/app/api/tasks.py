@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.datastructures import UploadFile
 
 from app.dev_extraction.uploads import LimitedUploadParser
@@ -16,6 +16,21 @@ from app.store import StoreError
 class CreateTask(BaseModel):
     model_config = ConfigDict(extra="forbid")
     sample_id: str = Field(min_length=1, max_length=100)
+
+
+class CreateCustomTask(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    subject: str = Field(min_length=1, max_length=500)
+    sender: str = Field(min_length=1, max_length=320)
+    body: str = Field(min_length=1, max_length=50_000)
+
+    @field_validator("subject", "sender", "body")
+    @classmethod
+    def reject_blank_text(cls, value: str):
+        value = value.strip()
+        if not value:
+            raise ValueError("Enter visible text")
+        return value
 
 
 class AnalyzeTask(BaseModel):
@@ -112,6 +127,15 @@ def build_task_router(settings, store):
     def create(payload: CreateTask, request: Request):
         guard(request)
         return execute(lambda: store.clone_task(payload.sample_id))
+
+    @router.post("/custom")
+    def create_custom(payload: CreateCustomTask, request: Request):
+        guard(request)
+        return execute(
+            lambda: store.create_custom_task(
+                payload.subject.strip(), payload.sender.strip(), payload.body.strip()
+            )
+        )
 
     @router.get("")
     def listing(page: int = Query(default=1, ge=1), limit: int = Query(default=50, ge=1, le=100)):

@@ -338,3 +338,95 @@ def test_text_input_limit_stays_reviewable_without_provider_call(tmp_path):
     bounded = add_input_too_large(base)
     assert any(issue.code == "AI_INPUT_TOO_LARGE" for issue in bounded.issues)
     assert provider.text_calls == []
+
+
+VALUES = {
+    "shipper": "APRIL FAR EAST (M) SDN BHD",
+    "consignee": "EAST BRIGHT FZ-LLC",
+    "notify_party": "EAST BRIGHT FZ-LLC",
+    "port_of_loading": "NANTONG, CHINA",
+    "port_of_discharge": "KARACHI, PAKISTAN",
+    "gross_weight_kg": "131,058 KG",
+}
+
+
+class UnseenLabelProvider(FakeSemanticProvider):
+    """Reads the fixture text the way the real fallback does: every value it
+    returns is quoted verbatim from a named source unit, so the backend can
+    verify it against the extracted text before accepting it."""
+
+    def extract_text(self, units, fields, *, timeout_seconds=None):
+        self.text_calls.append((units, fields, timeout_seconds))
+        candidates = []
+        for field in fields:
+            value = VALUES.get(field)
+            if field == "container_count":
+                # The planted discrepancy: the SI says six, the draft BL says seven.
+                value = "7" if any("Equipment Quantity" in u.text for u in units) else "6"
+            line = next(
+                (
+                    (unit, text.strip())
+                    for unit in units
+                    for text in unit.text.splitlines()
+                    if value and value in text
+                ),
+                None,
+            )
+            candidates.append(
+                TextCandidate(
+                    field=field,
+                    raw_value=value if line else None,
+                    unit_id=line[0].unit_id if line else None,
+                    quote=line[1] if line else None,
+                )
+            )
+        return TextResult(
+            response=TextResponse(fields=candidates),
+            metadata=metadata("readable-text-seven-fields-v1"),
+        )
+
+
+def test_unseen_labels_reach_comparison_through_verified_quotes():
+    """Neither fixture uses a label the rules know, and the two documents share
+    no label vocabulary. Rules alone see nothing; the verified text fallback
+    still resolves all seven fields and isolates the single real discrepancy."""
+    from app.ai.semantic import fallback_fields
+    from app.documents.analysis import classify, compare
+
+    fixtures = Path(__file__).parent / "fixtures/unseen-labels"
+    provider = UnseenLabelProvider()
+    documents = []
+    for role in ("SI", "BL"):
+        path = fixtures / f"unseen_labels_{role}.txt"
+        parsed = extract_document(
+            path.read_bytes(), path.name, document_id=role, expected_role=role
+        )
+        # Deterministic rules recognise the document type but not one label.
+        assert parsed.detected_role == role
+        assert all(field.value_state == "MISSING" for field in parsed.fields)
+        assert {issue.code for issue in parsed.issues} == {"FIELD_NOT_FOUND"}
+
+        requested = fallback_fields(parsed)
+        assert len(requested) == 7
+        merged = apply_text_candidates(
+            parsed, provider.extract_text(parsed.source_units, requested)
+        )
+        assert all(field.method == "gemini_text" for field in merged.fields)
+        documents.append(
+            {"document_id": role, "role": role, "result": merged.model_dump(mode="json")}
+        )
+
+    result = compare(
+        classify("TO CONFIRM DOCS _ 5ALT-01226", "Attached are the SI and draft BL."), documents
+    )
+    assert result["coverage"] == {"checked": 7, "total": 7}
+    assert result["known_defect_fields"] == ["container_count"]
+    containers = next(f for f in result["fields"] if f["key"] == "container_count")
+    assert (containers["si"]["raw_value"], containers["bl"]["raw_value"]) == ("6", "7")
+    # Every accepted value still points at a line of its own source document.
+    assert all(
+        field[side]["evidence"][0]["excerpt"]
+        in (fixtures / f"unseen_labels_{side.upper()}.txt").read_text()
+        for field in result["fields"]
+        for side in ("si", "bl")
+    )

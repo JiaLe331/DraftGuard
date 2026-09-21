@@ -112,7 +112,7 @@ def test_upload_persists_real_fields_trace_and_original(settings):
     "email_id,document_count,needs_review",
     [
         ("email_004", 2, False),
-        ("email_055", 2, True),
+        ("email_055", 2, False),
         ("email_516", 2, True),
         ("email_512", 1, True),
         ("email_000", 0, True),
@@ -138,7 +138,7 @@ def test_dataset_attachments_are_processed_independently(
         if email_id == "email_000":
             assert run["issues"][0]["code"] == "NO_ATTACHMENTS"
         if email_id == "email_055":
-            assert any(
+            assert not any(
                 i["code"] == "MISSING_WEIGHT_UNIT" for i in run["documents"][0]["result"]["issues"]
             )
         if email_id == "email_516":

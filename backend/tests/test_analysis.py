@@ -115,7 +115,7 @@ def test_scans_empty_corrupt_encrypted_and_spoofed_documents(tmp_path):
     assert parsed(path, "source.xlsx")["state"] == "UNREADABLE"
 
 
-def test_comparison_preserves_shared_port_values_and_review_states(tmp_path):
+def test_comparison_aligns_shared_values_and_keeps_blanks_missing(tmp_path):
     first = tmp_path / "si.txt"
     first.write_text("SHIPPING INSTRUCTION\nPOL: NHAVA SHEVA, INDIA (INNSA)\nGross Weight: 1234")
     second = tmp_path / "bl.txt"
@@ -128,10 +128,27 @@ def test_comparison_preserves_shared_port_values_and_review_states(tmp_path):
         ],
     )
     fields = {f["key"]: f for f in result["fields"]}
-    assert fields["port_of_loading"]["finding"] == "MISMATCH"
-    assert fields["port_of_loading"]["si"]["normalized_value"] == "NHAVA SHEVA, INDIA (INNSA)"
-    assert fields["gross_weight_kg"]["finding"] == "NEEDS_REVIEW"
+    # One side carries the UN/LOCODE and the other does not; it is the same port.
+    assert fields["port_of_loading"]["finding"] == "MATCH"
+    assert fields["port_of_loading"]["si"]["raw_value"] == "NHAVA SHEVA, INDIA (INNSA)"
+    assert fields["port_of_loading"]["bl"]["raw_value"] == "NHAVA SHEVA, INDIA"
+    assert fields["port_of_loading"]["si"]["normalized_value"] == "NHAVA SHEVA, INDIA"
+    assert fields["port_of_loading"]["bl"]["normalized_value"] == "NHAVA SHEVA, INDIA"
+    # A bare number under a gross-weight label is kilograms; the raw text stays.
+    assert fields["gross_weight_kg"]["finding"] == "MATCH"
     assert fields["gross_weight_kg"]["si"]["raw_value"] == "1234"
+    assert fields["gross_weight_kg"]["bl"]["raw_value"] == "1234 KG"
+    assert fields["gross_weight_kg"]["si"]["normalized_value"] == "1234"
+    # A value that is only placeholder fill stays missing rather than comparable.
+    blank = tmp_path / "blank.txt"
+    blank.write_text("SHIPPING INSTRUCTION\nPOL: ____MT\nGross Weight: ???")
+    solo = analyze(
+        {"subject": "Check draft BL", "body": ""},
+        [{"id": "0", "path": str(blank), "filename": blank.name}],
+    )
+    blanks = {f["key"]: f for f in solo["fields"]}
+    assert blanks["port_of_loading"]["si"]["value_state"] == "MISSING"
+    assert blanks["gross_weight_kg"]["si"]["value_state"] == "MISSING"
 
 
 def test_missing_attachments_never_match():
@@ -171,8 +188,10 @@ def test_provided_dataset_acceptance(tmp_path):
     assert si[-1]["si"]["normalized_value"] == "23702"
     spreadsheet = results["email_055"]["fields"]
     assert all(f["finding"] == "MATCH" for f in spreadsheet[:6])
-    assert spreadsheet[-1]["finding"] == "NEEDS_REVIEW"
-    assert spreadsheet[-1]["si"]["reason"] == "MISSING_WEIGHT_UNIT"
+    # The spreadsheet cell holds the number alone; the compared field is in kg.
+    assert spreadsheet[-1]["finding"] == "MATCH"
+    assert spreadsheet[-1]["si"]["raw_value"] == "243588"
+    assert spreadsheet[-1]["si"]["normalized_value"] == "243588"
     assert spreadsheet[-1]["bl"]["normalized_value"] == "243588"
     assert any(
         r["code"] == "WRONG_DOCUMENT_TYPE" for r in results["email_501"]["review_requirements"]

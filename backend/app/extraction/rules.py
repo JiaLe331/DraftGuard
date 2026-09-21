@@ -51,14 +51,25 @@ OTHER_LABEL = re.compile(
     re.I,
 )
 ADDRESS = re.compile(
-    r"^(?:\d|#|P\.?\s*O\.?\s*BOX\b|TEL\b|FAX\b|EMAIL\b|E-MAIL\b|ADDRESS\b)"
-    r"|\b(?:BLDG|BUILDING|INDUSTRIAL ZONE|AMENITY CENTER)\b"
-    r"|(?=.*\d).*\b(?:ROAD|STREET|AVENUE)\b",
+    # Street wording differs by country, so a line carrying any number, or a
+    # common site word, is address detail rather than a second party name.
+    r"^(?:#|P\.?\s*O\.?\s*BOX\b|TEL\b|FAX\b|EMAIL\b|E-MAIL\b|ADDRESS\b|LOT\b)"
+    r"|\d"
+    r"|\b(?:BLDG|BUILDING|AMENITY CENTER|INDUSTRIAL ZONE|ZONE INDUSTRIELLE"
+    r"|INDUSTRIAL (?:ESTATE|PARK)|FREE ZONE)\b",
     re.I,
 )
 COMPANY_SUFFIX = re.compile(r"\b(?:LTD|LLC|INC|BHD|PTE|LIMITED|CORPORATION)\b", re.I)
+# The same port is written with or without its UN/LOCODE across SI and BL.
+LOCODE = re.compile(r"\s*\(\s*[A-Z]{5}\s*\)\s*$")
 AGENCY = re.compile(r"^(?:ON BEHALF OF|AS AGENT(?:S)? FOR|C/?O)\b", re.I)
-MISSING = re.compile(r"^(?:N\s*/?\s*A|TBA|TBD|NONE|NULL|NOT AVAILABLE|NOT PROVIDED|[-_\s]*)$", re.I)
+# A box filled only with placeholder characters carries no value, with or
+# without a trailing unit ("____MT", "???", "TBC").
+MISSING = re.compile(
+    r"^(?:N\s*/?\s*A|TB[ACD]|NONE|NULL|NOT AVAILABLE|NOT PROVIDED"
+    r"|[-_?.\s]*|[-_?.\s]+\s*(?:KGS?|MTS?|TONNES?))$",
+    re.I,
+)
 
 
 def clean_label(text: str) -> str:
@@ -303,7 +314,13 @@ def normalize(item: Candidate) -> tuple[str | None, str | None, str, str | None]
             m.group().upper() for text in (item.label, raw) for m in UNIT_PATTERN.finditer(text)
         ]
         if not unit_names:
-            return raw, None, "AMBIGUOUS", "MISSING_WEIGHT_UNIT"
+            # A spreadsheet cell carries the number alone under a gross-weight
+            # label. The compared field is defined in kilograms, so a bare number
+            # with no contradicting unit anywhere is read as kilograms.
+            number = _number(raw)
+            if number is None:
+                return raw, None, "AMBIGUOUS", "MISSING_WEIGHT_UNIT"
+            return raw, _decimal_string(number), "PRESENT", None
         factors = {
             Decimal("1")
             if name.startswith("K")
@@ -322,8 +339,11 @@ def normalize(item: Candidate) -> tuple[str | None, str | None, str, str | None]
             context.prec = 110
             normalized = _decimal_string(number * next(iter(factors)))
         return raw, normalized, "PRESENT", None
-    if key in {"port_of_loading", "port_of_discharge"} and len(raw.splitlines()) > 1:
-        return raw, None, "AMBIGUOUS", "AMBIGUOUS_TEXT_VALUE"
+    if key in {"port_of_loading", "port_of_discharge"}:
+        if len(raw.splitlines()) > 1:
+            return raw, None, "AMBIGUOUS", "AMBIGUOUS_TEXT_VALUE"
+        # A trailing code qualifies the same port; it is not a different place.
+        normalized_text = LOCODE.sub("", normalized_text).strip() or normalized_text
     return raw, " ".join(normalized_text.upper().split()), "PRESENT", None
 
 

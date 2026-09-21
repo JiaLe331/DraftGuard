@@ -107,7 +107,8 @@ def test_live_source_checkpoints_capacity_and_cursors(settings, monkeypatch, tmp
             range(1, len(result["events"]) + 1)
         )
         assert client.get(f"/api/v1/dev/runs?q={first}").json()["total"] == 1
-        assert client.get("/api/v1/dev/runs?q=email_055&needs_review=true").json()["total"] == 1
+        assert client.get("/api/v1/dev/runs?q=email_055&needs_review=true").json()["total"] == 0
+        assert client.get("/api/v1/dev/runs?q=email_055&needs_review=false").json()["total"] == 1
         assert (
             client.get("/api/v1/dev/runs?q=email_004_SI.txt&status=SUCCEEDED").json()["total"] == 1
         )

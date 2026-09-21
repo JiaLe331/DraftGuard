@@ -159,15 +159,16 @@ def test_real_txt_values_preserve_company_discrepancies():
         assert_evidence(result)
 
 
-def test_real_office_values_and_absent_weight_unit():
+def test_real_office_values_and_unitless_spreadsheet_weight():
     docx, xlsx = fixture("email_055_BL.docx"), fixture("email_055_SI.xlsx")
     assert field(docx, "gross_weight_kg").raw_value == "243,588"
     assert field(docx, "gross_weight_kg").normalized_value == "243588"
     assert not docx.needs_review
     assert field(xlsx, "gross_weight_kg").raw_value == "243588"
-    assert field(xlsx, "gross_weight_kg").normalized_value is None
-    assert field(xlsx, "gross_weight_kg").value_state == "AMBIGUOUS"
-    assert "MISSING_WEIGHT_UNIT" in codes(xlsx)
+    assert field(xlsx, "gross_weight_kg").normalized_value == "243588"
+    assert field(xlsx, "gross_weight_kg").value_state == "PRESENT"
+    assert "MISSING_WEIGHT_UNIT" not in codes(xlsx)
+    assert not xlsx.needs_review
     assert {(e.sheet, e.cell) for e in field(xlsx, "gross_weight_kg").evidence} == {
         ("S.I.", "A10"),
         ("S.I.", "B10"),
@@ -508,7 +509,7 @@ def test_cli_json_and_exit_codes(tmp_path):
     failed = run(corrupt)
     assert failed.returncode == 2
     assert json.loads(failed.stdout)["parsing_status"] == "FAILED"
-    review = run(FIXTURES / "email_055_SI.xlsx", "--document-id", "source-v2")
+    review = run(FIXTURES / "email_516_SI.txt", "--document-id", "source-v2")
     assert review.returncode == 0
     assert json.loads(review.stdout)["needs_review"]
     assert json.loads(review.stdout)["document_id"] == "source-v2"

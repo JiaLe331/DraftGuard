@@ -71,12 +71,8 @@ export function Shell() {
             <ListIcon size={23} />
           </button>
           <Link className="brand" to="/overview">
-            <span className="brand-mark">
-              <ShieldCheckIcon size={24} weight="bold" />
-            </span>
-            <span>
-              Draft<span className="brand-light">Guard</span>
-            </span>
+            <span>DraftGuard</span>
+            <span className="brand-period">.</span>
           </Link>
         </div>
         {!isExtraction && (
@@ -85,8 +81,8 @@ export function Shell() {
             <input
               key={params.get('q') ?? ''}
               ref={searchRef}
-              aria-label="Search emails and tasks"
-              placeholder="Search emails, shipments, or senders"
+              aria-label="Search emails, shipments, or senders"
+              placeholder="Search emails or shipments"
               defaultValue={params.get('q') ?? ''}
             />
             <kbd aria-hidden="true">↵</kbd>

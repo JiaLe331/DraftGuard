@@ -147,6 +147,14 @@ def compare(classification: dict, documents: list[dict], emit=None, selected_pai
         "processing_status": "SUCCEEDED",
         "provider_calls": [],
     }
+    if classification.get("provider_metadata"):
+        result["provider_calls"].append(
+            {
+                "operation": "email_classification",
+                "document_id": None,
+                **classification["provider_metadata"],
+            }
+        )
     requirements = result["review_requirements"]
     if classification["category"] is None:
         result["workflow_state"] = "REVIEW_REQUIRED"
@@ -161,6 +169,12 @@ def compare(classification: dict, documents: list[dict], emit=None, selected_pai
         if adapted["extraction"] and adapted["extraction"].get("provider_metadata"):
             result["provider_calls"].append(
                 {
+                    "operation": "vision_extraction"
+                    if any(
+                        value.get("method") == "gemini_vision"
+                        for value in adapted["values"].values()
+                    )
+                    else "text_extraction",
                     "document_id": adapted["id"],
                     **adapted["extraction"]["provider_metadata"],
                 }

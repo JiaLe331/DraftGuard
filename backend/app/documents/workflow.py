@@ -16,8 +16,20 @@ class MailboxWorkflow:
             "mode": mode,
         }
 
-    def prepare(self, run, emit):
+    def prepare(self, run, emit, semantic_provider=None, timeout_seconds=None):
         classification = classify(self.email["subject"], self.email["body"])
+        if classification["category"] is None and semantic_provider is not None:
+            semantic = semantic_provider.classify_email(
+                self.email["subject"], self.email["body"], timeout_seconds=timeout_seconds
+            )
+            classification = {
+                **classification,
+                "category": semantic.response.category,
+                "method": "gemini",
+                "status": "CLASSIFIED",
+                "reason": semantic.response.reason,
+                "provider_metadata": semantic.metadata.model_dump(mode="json"),
+            }
         run["classification"] = classification
         emit(
             "classification",
@@ -30,14 +42,14 @@ class MailboxWorkflow:
     def finish(self, run, emit):
         run["processing_status"] = "RUNNING"
         pair = None
-        if self.email.get("baseline_id"):
+        if self.email.get("record_kind") == "task":
             pair = {
                 role: self.email[f"current_{role}_id"]
                 for role in ("si", "bl")
                 if self.email.get("pair_selected") or self.email[f"current_{role}_id"] is not None
             }
         result = compare(run["classification"], run["documents"], emit, selected_pair=pair)
-        if self.email.get("baseline_id"):
+        if self.email.get("record_kind") == "task":
             baseline_id = self.email.get("baseline_run_id")
             with self.store.connect() as db:
                 baseline = self.store._run(db, baseline_id)
@@ -90,7 +102,7 @@ class MailboxWorkflow:
             or current["latest_run_id"] != self.run_id
             or active["status"] != "RUNNING"
         )
-        if success and stale and not self.email.get("baseline_id"):
+        if success and stale and self.email.get("record_kind") == "sample":
             raise DatasetError("stale_run", "This result is no longer current.", 409)
         errors = [*run["issues"], *(d["error"] for d in run["documents"] if d["error"])]
         error = (
@@ -116,7 +128,11 @@ class MailboxWorkflow:
                 self.run_id,
             ),
         )
-        if success and self.email.get("baseline_id") and not self.email.get("pair_selected"):
+        if (
+            success
+            and self.email.get("record_kind") == "task"
+            and not self.email.get("pair_selected")
+        ):
             pair = {}
             for role in ("si", "bl"):
                 options = [

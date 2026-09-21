@@ -20,7 +20,9 @@ from app.dev_extraction.store import AuditStore
 from app.store import Store
 
 
-def create_app(settings: Settings | None = None, vision_provider=None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None, vision_provider=None, semantic_provider=None
+) -> FastAPI:
     settings = settings if settings is not None else Settings()
 
     @asynccontextmanager
@@ -49,7 +51,9 @@ def create_app(settings: Settings | None = None, vision_provider=None) -> FastAP
     if settings.app_env == "development":
         store = AuditStore(settings.dev_audit_db)
         application.state.audit_store = store
-        application.state.run_service = RunService(store, settings, vision_provider)
+        application.state.run_service = RunService(
+            store, settings, vision_provider, semantic_provider
+        )
         application.state.mailbox_store = Store(
             settings.local_data_dir, application.state.run_service
         )
@@ -77,7 +81,12 @@ def create_app(settings: Settings | None = None, vision_provider=None) -> FastAP
     @application.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError):
         if request.url.path.startswith(
-            ("/api/v1/samples", "/api/v1/dev/samples", "/api/v1/dev/tasks")
+            (
+                "/api/v1/samples",
+                "/api/v1/records",
+                "/api/v1/dev/samples",
+                "/api/v1/dev/tasks",
+            )
         ):
             return await request_validation_exception_handler(request, exc)
         return error_response(
@@ -90,7 +99,12 @@ def create_app(settings: Settings | None = None, vision_provider=None) -> FastAP
     @application.exception_handler(HTTPException)
     async def http_error(request: Request, exc: HTTPException):
         if request.url.path.startswith(
-            ("/api/v1/samples", "/api/v1/dev/samples", "/api/v1/dev/tasks")
+            (
+                "/api/v1/samples",
+                "/api/v1/records",
+                "/api/v1/dev/samples",
+                "/api/v1/dev/tasks",
+            )
         ):
             return await http_exception_handler(request, exc)
         return error_response(

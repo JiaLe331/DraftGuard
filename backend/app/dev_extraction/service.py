@@ -11,7 +11,17 @@ from pathlib import PureWindowsPath
 from time import perf_counter
 from uuid import uuid4
 
-from app.ai import GeminiVisionProvider, VisionProviderError, apply_visual_candidates
+from app.ai import (
+    AIProviderError,
+    GeminiSemanticProvider,
+    GeminiVisionProvider,
+    VisionProviderError,
+    add_input_too_large,
+    apply_text_candidates,
+    apply_visual_candidates,
+    fallback_fields,
+    source_text_length,
+)
 from app.config import Settings
 from app.extraction.models import DocumentExtraction, SourceUnit
 
@@ -32,9 +42,16 @@ class DocumentInput:
 
 
 class RunService:
-    def __init__(self, store: AuditStore, settings: Settings, vision_provider=None):
+    def __init__(
+        self,
+        store: AuditStore,
+        settings: Settings,
+        vision_provider=None,
+        semantic_provider=None,
+    ):
         self.store, self.settings = store, settings
         self.vision_provider = vision_provider or GeminiVisionProvider(settings)
+        self.semantic_provider = semantic_provider or GeminiSemanticProvider(settings)
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="extraction")
         self.capacity = threading.BoundedSemaphore(2)
         self.stopping = threading.Event()
@@ -275,12 +292,84 @@ class RunService:
         )
         return adapted.model_dump(mode="json")
 
+    def _text_extract(self, run, document, result, start, remaining):
+        parsed = DocumentExtraction.model_validate(result)
+        fields = fallback_fields(parsed)
+        if not fields:
+            return result
+        if source_text_length(parsed.source_units) > self.settings.gemini_text_max_chars:
+            adapted = add_input_too_large(parsed)
+            self._record(
+                run,
+                document,
+                "text_provider",
+                "NEEDS_REVIEW",
+                "Readable source exceeds the bounded semantic-input limit.",
+                start,
+                code="AI_INPUT_TOO_LARGE",
+                retryable=False,
+                requested_fields=fields,
+            )
+            return adapted.model_dump(mode="json")
+        began = perf_counter()
+        self._record(
+            run,
+            document,
+            "text_provider",
+            "STARTED",
+            "Sending one readable document for semantic field extraction.",
+            start,
+            provider="gemini",
+            configured_model=getattr(self.semantic_provider, "model", None),
+            requested_fields=fields,
+        )
+        try:
+            semantic = self.semantic_provider.extract_text(
+                parsed.source_units, fields, timeout_seconds=remaining
+            )
+            adapted = apply_text_candidates(parsed, semantic)
+        except AIProviderError as exc:
+            self._record(
+                run,
+                document,
+                "text_provider",
+                "FAILED",
+                exc.message,
+                start,
+                code=exc.code,
+                retryable=exc.retryable,
+                duration_ms=round((perf_counter() - began) * 1000, 3),
+            )
+            raise
+        metadata = semantic.metadata.model_dump(mode="json")
+        self._record(
+            run,
+            document,
+            "text_provider",
+            "NEEDS_REVIEW" if adapted.needs_review else "SUCCEEDED",
+            "Semantic field extraction returned source-bound results.",
+            start,
+            **metadata,
+            requested_fields=fields,
+        )
+        return adapted.model_dump(mode="json")
+
     def _execute(self, run, inputs, start, workflow=None):
         def emit(stage, status, message, **details):
             self._record(run, None, stage, status, message, start, **details)
 
         try:
-            should_extract = workflow.prepare(run, emit) if workflow else True
+            remaining = self.settings.dev_run_timeout - (perf_counter() - start)
+            should_extract = (
+                workflow.prepare(
+                    run,
+                    emit,
+                    self.semantic_provider,
+                    min(self.settings.gemini_timeout_seconds, remaining),
+                )
+                if workflow
+                else True
+            )
             for source, document in zip(inputs, run["documents"], strict=True):
                 if self.stopping.is_set():
                     break
@@ -323,6 +412,14 @@ class RunService:
                     if (
                         result is not None
                         and error is None
+                        and result["parsing_status"] == "READABLE"
+                    ):
+                        remaining = self.settings.dev_run_timeout - (perf_counter() - start)
+                        if remaining > 0:
+                            result = self._text_extract(run, document, result, start, remaining)
+                    if (
+                        result is not None
+                        and error is None
                         and result["detected_format"] == "pdf"
                         and result["parsing_status"] == "NO_USABLE_TEXT"
                     ):
@@ -343,7 +440,7 @@ class RunService:
                         if error or result["parsing_status"] in {"FAILED", "REJECTED"}
                         else "SUCCEEDED"
                     )
-                except (DatasetError, VisionProviderError, OSError) as exc:
+                except (DatasetError, AIProviderError, VisionProviderError, OSError) as exc:
                     document.update(
                         processing_status="FAILED",
                         error={
@@ -413,6 +510,9 @@ class RunService:
                 run, "AUDIT_SAVE_FAILED", "Audit recording failed; extraction stopped.", workflow
             )
             raise
+        except AIProviderError as exc:
+            self._fail(run, exc.code, exc.message, workflow, retryable=exc.retryable)
+            return self.store.get(run["run_id"])
         except Exception as exc:
             self._fail(
                 run,
@@ -422,7 +522,7 @@ class RunService:
             )
             return self.store.get(run["run_id"])
 
-    def _fail(self, run, code, message, workflow=None):
+    def _fail(self, run, code, message, workflow=None, *, retryable=False):
         with self.lock:
             self.recording_failures.add(run["run_id"])
             if workflow:
@@ -444,13 +544,14 @@ class RunService:
                 document["events"] = []
                 if document["processing_status"] in {"PENDING", "RUNNING"}:
                     document.update(
-                        processing_status="FAILED", error={"code": code, "message": message}
+                        processing_status="FAILED",
+                        error={"code": code, "message": message, "retryable": retryable},
                     )
             saved.update(processing_status="FAILED", needs_review=True, finished_at=now())
-            saved["issues"].append({"code": code, "message": message})
+            saved["issues"].append({"code": code, "message": message, "retryable": retryable})
             self.store.save(
                 saved,
-                [event("run", "FAILED", message, code=code)],
+                [event("run", "FAILED", message, code=code, retryable=retryable)],
                 commit=workflow.commit if workflow else None,
             )
             with self.lock:

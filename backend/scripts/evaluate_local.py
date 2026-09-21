@@ -100,8 +100,10 @@ def main() -> None:
         json.loads(args.provider_records.read_text()) if args.provider_records else []
     )
     token_usage = Counter()
+    operation_counts = Counter()
     for record in provider_records:
         token_usage.update(record.get("usage") or {})
+        operation_counts[record.get("operation") or "unknown"] += 1
     report = {
         "manifest_version": manifest["version"],
         "generated_at": datetime.now(UTC).isoformat(),
@@ -125,6 +127,7 @@ def main() -> None:
         },
         "ai": {
             "call_count": len(provider_records),
+            "operation_counts": dict(sorted(operation_counts.items())),
             "calls": provider_records,
             "latency_ms": [record["duration_ms"] for record in provider_records],
             "token_usage": dict(token_usage) or None,
@@ -157,6 +160,10 @@ def main() -> None:
         for category, values in per_class.items()
         for metric in ("precision", "recall", "f1")
     )
+    rows.extend(
+        ("ai", operation, "call_count", count)
+        for operation, count in sorted(operation_counts.items())
+    )
     with (args.output / "evaluation.csv").open("w", newline="") as stream:
         writer = csv.writer(stream)
         writer.writerow(("area", "scope", "metric", "value"))
@@ -175,6 +182,7 @@ def main() -> None:
         f"- Evidence quote validity: {report['extraction']['evidence_quote_validity']:.1%}",
         f"- Quote mismatch rejected: {'yes' if quote_mismatch_passed else 'no'}",
         f"- Recorded real AI calls: {len(provider_records)}",
+        *[f"  - `{operation}`: {count}" for operation, count in sorted(operation_counts.items())],
         "- Cost: unavailable",
         "",
         "## Per-class metrics",

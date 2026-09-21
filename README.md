@@ -2,7 +2,7 @@
 
 DraftGuard turns the organizer's shipping-document dataset into a local demo mailbox. It imports original email JSON and attachments, runs rule-first classification and seven-field SI / draft-BL comparison, uses server-side Gemini only for ambiguous classification, bounded readable-text fallback, or image-only PDFs, and saves machine results plus human review overlays in SQLite. Overview, Inbox, and the verification workspace use the backend API; no personal Gmail account is connected.
 
-This is a **localhost-first development milestone**. Organizer samples are read only; create a working copy or a blank local task before analysis or review. Gemini paths are available only when both server-side settings are supplied. Local tasks support rule/text/visual source-backed correction, visual confirmation, externally supplied information with provenance, exact-run completion acknowledgment, and reviewed current/historical reports. Cloud persistence, session ownership, and public deployment are intentionally deferred. `CHECK_COMPLETE` means the bounded seven-field check was acknowledged; it is not legal or cargo-release approval.
+This is a **localhost-first development milestone**. Organizer samples are read only; create a working copy or a blank local task before analysis or review. Gemini paths are available only when both server-side settings are supplied. Local tasks support rule/text/visual source-backed correction, visual confirmation, externally supplied information with provenance, reviewer-controlled copy-only amendment drafts, exact-run completion acknowledgment, and reviewed current/historical reports. Cloud persistence, session ownership, and public deployment are intentionally deferred. `CHECK_COMPLETE` means the bounded seven-field check was acknowledged; it is not legal or cargo-release approval.
 
 ## Requirements and installation
 
@@ -131,7 +131,8 @@ Manual acceptance uses the organizer's original `email_512` SI and draft-BL PDFs
 5. If all seven findings match, use the eligibility card and acknowledgment dialog to complete the exact current run. Verify the state becomes `CHECK_COMPLETE`; a mismatch, pending candidate, or supplied-information event blocks completion.
 6. Refresh the browser and restart the backend. Verify the machine result, reviewed comparison, completion, and append-only review activity all return; open an older run and verify it is read only.
 7. Open the report and verify its designation, exact source versions/hashes, reviewed values, full Confirm/Correct/Supply ledger, and completion acknowledgment or blockers.
-8. Inspect 1440, 1024, 768, and 375 px layouts, 200% zoom, keyboard focus, 44 px actions, landscape, print pagination, and reduced-motion behavior.
+8. On an actionable current run, open **Draft amendment email**. Verify Gemini changes only subject/opening/closing, the evidence-backed issue list is locked, edited wording survives refresh, and **Copy email** produces plain text. Force a provider failure and deliberately choose **Generate standard draft**; nothing should be sent.
+9. Inspect 1440, 1024, 768, and 375 px layouts, 200% zoom, keyboard focus, 44 px actions, landscape, print pagination, and reduced-motion behavior.
 
 If the default ports are occupied, run the backend on 8001 and the frontend on 5174:
 
@@ -160,6 +161,8 @@ Search by email ID, subject, sender, or body. Inbox pages contain 50 emails in d
 - **email_516:** SI weight remains missing; BL weight is not copied into it.
 
 Use **Reanalyze** to run the same pipeline on the stored immutable sources. It saves a new run, marks it **On demand · Rules**, and refreshes the current result. Import-time runs are labeled **Precomputed · Rules**. A failed rerun keeps the last successful result visible with an explicit failure notice. Refreshes and backend restarts preserve saved results.
+
+For an unfinished current comparison with discrepancies or review requirements, **Draft amendment email** creates a local, copy-only request. DraftGuard deterministically owns the issue list; Gemini sees only the original subject plus issue counts/types and may polish only the subject, opening, and closing. The reviewer can edit and save that wording, copy the complete plain-text email, retry a failed Gemini call, or explicitly choose a standard template. Samples, historical/completed/clean runs, and stale revisions are rejected. A new source revision or changed current run invalidates the old draft. DraftGuard never opens a mail client or sends the message.
 
 **Print report** opens an in-page reviewed-report preview using the same component and table styling as printing. **Print / Save PDF** invokes the browser print dialog where supported. The report identifies machine-only, human-reviewed, or completed output and includes exact source versions/hashes, machine and reviewed values, evidence, the complete review ledger, revision changes, and completion acknowledgment or blockers. The in-app browser may not expose a system print dialog; use a normal browser to print or save a PDF.
 
@@ -224,31 +227,33 @@ Attachment buttons and **Open original** now open an in-page preview: original T
 
 ## API and configuration
 
-| Endpoint | Behavior |
-|---|---|
-| `GET /api/health` | Process liveness plus local extraction capability and upload limit |
-| `GET /api/v1/samples` | `q`, `category`, `status`, `page`, `limit` (default 50, maximum 100); returns `items`, filtered `total`, and global `summary` |
-| `GET /api/v1/samples/{id}` | Original email, current documents, latest attempt, last successful result, and run summaries |
-| `GET /api/v1/samples/{id}/documents/{document_id}/content` | Original registered source, checked against its content hash |
-| `GET /api/v1/records/{id}` | Unified sample/task read route; responses include explicit `record_kind` |
-| `GET /api/v1/records/{id}/documents/{document_id}/content` | Unified immutable source route used without inferring kind from an ID prefix |
-| `POST /api/v1/dev/samples/{id}/analyze` | Always returns 409 `sample_read_only`; create a working copy first |
+| Endpoint                                                   | Behavior                                                                                                                      |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/health`                                          | Process liveness plus local extraction capability and upload limit                                                            |
+| `GET /api/v1/samples`                                      | `q`, `category`, `status`, `page`, `limit` (default 50, maximum 100); returns `items`, filtered `total`, and global `summary` |
+| `GET /api/v1/samples/{id}`                                 | Original email, current documents, latest attempt, last successful result, and run summaries                                  |
+| `GET /api/v1/samples/{id}/documents/{document_id}/content` | Original registered source, checked against its content hash                                                                  |
+| `GET /api/v1/records/{id}`                                 | Unified sample/task read route; responses include explicit `record_kind`                                                      |
+| `GET /api/v1/records/{id}/documents/{document_id}/content` | Unified immutable source route used without inferring kind from an ID prefix                                                  |
+| `POST /api/v1/dev/samples/{id}/analyze`                    | Always returns 409 `sample_read_only`; create a working copy first                                                            |
 
 Local task endpoints (development only):
 
-| Endpoint | Behavior |
-|---|---|
-| `POST /api/v1/dev/tasks` | `{ "sample_id": "email_004" }`; creates a working copy with no copied analysis |
-| `POST /api/v1/dev/tasks/custom` | Required `subject` (1–500), `sender` (1–320), and `body` (1–50,000); creates an empty revision-one task |
-| `GET /api/v1/dev/tasks` | Paginated local task list (`page`, `limit`) |
-| `GET /api/v1/dev/tasks/{id}` | Current task, active attachments, pair IDs, runs, and saved results |
-| `POST /api/v1/dev/tasks/{id}/documents` | Multipart `file`, `role` (`si`/`bl`), `expected_revision`; saves an immutable source and advances revision |
-| `POST /api/v1/dev/tasks/{id}/pair` | JSON `si_id`, `bl_id` (nullable), `expected_revision`; explicitly selects current attachments |
-| `POST /api/v1/dev/tasks/{id}/analyze` | JSON `expected_revision`; `?wait=false` uses existing bounded background execution |
-| `POST /api/v1/dev/tasks/{id}/reviews` | Appends `CONFIRM_CANDIDATE`, `CORRECT_EXTRACTION`, or `SUPPLY_INFORMATION` for the current revision/run/document/field and returns the updated task; stale/completed writes return 409 |
-| `POST /api/v1/dev/tasks/{id}/complete` | Acknowledges the exact eligible current run and seven-field scope; returns structured blockers for ineligible runs and is idempotent after success |
-| `GET /api/v1/dev/tasks/{id}/runs/{run_id}` | Read-only snapshot with exact run sources, results, and historical designation |
-| `GET /api/v1/dev/tasks/{id}/documents/{document_id}/content` | Registered task source; `?download=true` downloads its immutable bytes |
+| Endpoint                                                     | Behavior                                                                                                                                                                               |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/v1/dev/tasks`                                     | `{ "sample_id": "email_004" }`; creates a working copy with no copied analysis                                                                                                         |
+| `POST /api/v1/dev/tasks/custom`                              | Required `subject` (1–500), `sender` (1–320), and `body` (1–50,000); creates an empty revision-one task                                                                                |
+| `GET /api/v1/dev/tasks`                                      | Paginated local task list (`page`, `limit`)                                                                                                                                            |
+| `GET /api/v1/dev/tasks/{id}`                                 | Current task, active attachments, pair IDs, runs, and saved results                                                                                                                    |
+| `POST /api/v1/dev/tasks/{id}/documents`                      | Multipart `file`, `role` (`si`/`bl`), `expected_revision`; saves an immutable source and advances revision                                                                             |
+| `POST /api/v1/dev/tasks/{id}/pair`                           | JSON `si_id`, `bl_id` (nullable), `expected_revision`; explicitly selects current attachments                                                                                          |
+| `POST /api/v1/dev/tasks/{id}/analyze`                        | JSON `expected_revision`; `?wait=false` uses existing bounded background execution                                                                                                     |
+| `POST /api/v1/dev/tasks/{id}/reviews`                        | Appends `CONFIRM_CANDIDATE`, `CORRECT_EXTRACTION`, or `SUPPLY_INFORMATION` for the current revision/run/document/field and returns the updated task; stale/completed writes return 409 |
+| `POST /api/v1/dev/tasks/{id}/complete`                       | Acknowledges the exact eligible current run and seven-field scope; returns structured blockers for ineligible runs and is idempotent after success                                     |
+| `POST /api/v1/dev/tasks/{id}/amendment-draft`                | Generates Gemini-polished or standard wording for the exact current actionable run; Gemini never receives field values or source excerpts                                             |
+| `PUT /api/v1/dev/tasks/{id}/amendment-draft/{draft_id}`      | Saves recipient, subject, opening, and closing only; locked issues are rebuilt and stale revision/run/facts are rejected                                                               |
+| `GET /api/v1/dev/tasks/{id}/runs/{run_id}`                   | Read-only snapshot with exact run sources, results, and historical designation                                                                                                         |
+| `GET /api/v1/dev/tasks/{id}/documents/{document_id}/content` | Registered task source; `?download=true` downloads its immutable bytes                                                                                                                 |
 
 The UI requests analysis after a successful source/pair write. A write response alone does not claim an analysis succeeded. Stale writes return 409. `development_tasks` in health advertises availability independently of the optional standalone extraction UI.
 
@@ -260,7 +265,7 @@ From `backend/`, run:
 uv run --frozen python scripts/evaluate_local.py
 ```
 
-The tracked manifest covers all five categories, TXT/DOCX/XLSX/PDF, all seven fields, and a case-sensitive quote mismatch. Gitignored JSON, CSV, and Markdown artifacts are written under `.local/evaluation/`. They report the confusion matrix, per-class precision/recall/F1, extraction accuracy, value-state breakdown, evidence quote validity, and AI-call telemetry. The deterministic frozen run does not call Gemini and reports cost as unavailable. After a real smoke test, pass an ignored JSON array of provider metadata with `--provider-records .local/evaluation/provider-smoke.json` to include actual call count, latency, response/model IDs, and token usage without putting those records into Git. Evaluation ground truth is never loaded by runtime routes.
+The tracked manifest covers all five categories, TXT/DOCX/XLSX/PDF, all seven fields, and a case-sensitive quote mismatch. Gitignored JSON, CSV, and Markdown artifacts are written under `.local/evaluation/`. They report the confusion matrix, per-class precision/recall/F1, extraction accuracy, value-state breakdown, evidence quote validity, and AI-call telemetry. The deterministic frozen run does not call Gemini and reports cost as unavailable. After a real smoke test, pass an ignored JSON array of provider metadata with `--provider-records .local/evaluation/provider-smoke.json` to include actual call count by operation—including `amendment_email`—latency, response/model IDs, and token usage without putting those records into Git. Evaluation ground truth is never loaded by runtime routes.
 
 After the final demo scenarios pass, stop the backend and create a content-hashed store archive:
 

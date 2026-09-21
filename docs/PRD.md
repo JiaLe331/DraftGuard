@@ -21,13 +21,13 @@ The system supports a bounded document check. It does not certify a complete BL,
 
 ## 2. Users and jobs to be done
 
-| User | Situation | Required outcome |
-|---|---|---|
-| Shipping documentation reviewer | A mixed inbox contains a request to compare SI and draft BL | Find the request and identify document discrepancies |
+| User                            | Situation                                                        | Required outcome                                                                |
+| ------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Shipping documentation reviewer | A mixed inbox contains a request to compare SI and draft BL      | Find the request and identify document discrepancies                            |
 | Shipping documentation reviewer | A file is missing, unreadable, incomplete, or visually extracted | Understand the blocker and confirm, correct, or request the missing information |
-| Shipping documentation reviewer | A carrier or forwarder supplies a revised draft | Verify the current version and detect newly introduced errors |
-| Colleague receiving a handover | A task has already been checked | See the source files, remaining issues, and review actions for that version |
-| Hackathon judge | Opens the submitted deployment link | Use representative workflows immediately, without registration |
+| Shipping documentation reviewer | A carrier or forwarder supplies a revised draft                  | Verify the current version and detect newly introduced errors                   |
+| Colleague receiving a handover  | A task has already been checked                                  | See the source files, remaining issues, and review actions for that version     |
+| Hackathon judge                 | Opens the submitted deployment link                              | Use representative workflows immediately, without registration                  |
 
 These workflows are supported by the challenge and published shipping-document processes. No customer interview or operational deployment has been completed unless separately documented.
 
@@ -58,25 +58,26 @@ These are release targets, not guarantees about unseen documents. Accuracy, late
 - Durable background queues, Cron scheduling, automatic background recovery, and a general job orchestration framework.
 - Registration, account management, role-based team workflows, and verified reviewer identities.
 - LlamaIndex, pgvector, correction-memory retrieval, model fine-tuning, and learning-effect experiments.
-- Automated amendment emails, email sending, live mailbox OAuth integration, and ERP integration.
+- Automatic email sending, live mailbox OAuth integration, recipient lookup, attachments, and ERP integration. The reviewer-controlled, copy-only amendment draft in F09 is permitted; it never sends or changes task state.
 - Invoice processing or SI creation beyond email classification.
 - Pixel-perfect rendering and bounding-box highlights for every document format.
 - Automatic BL issuance, approval by a carrier, or cargo release.
 
 Basic access controls, version consistency, and visible failures remain required despite these exclusions.
 
-## 4. Product scope: eight P0 capabilities
+## 4. Product scope: eight P0 capabilities plus one demo enhancement
 
-| ID | Capability | Required behavior | Acceptance reference |
-|---|---|---|---|
-| F01 | Email classification and task list | Classify five email categories; route document-comparison requests to the checking workflow | AC01–AC03 |
-| F02 | Four-format document reading | Read TXT, PDF, DOCX, and XLSX; distinguish usable text, no usable text, and parsing failure | AC04–AC06 |
-| F03 | Seven-field comparison | Show SI and BL values side by side, normalize conservatively, and identify field-level findings | AC07–AC10 |
-| F04 | Source evidence | Provide format-appropriate source references and original excerpts | AC11–AC12 |
-| F05 | Exceptions and human review | Identify the four challenge exception reasons; allow attributable confirmation or correction | AC13–AC17 |
-| F06 | Revised-document recheck | Recheck all seven fields and show resolved, persistent, and new discrepancies | AC18–AC21 |
-| F07 | Vision-assisted scanned documents | Obtain actual Gemini candidates; require human confirmation before completing the check | AC22–AC24 |
-| F08 | Printable report | Export the current comparison, source versions, review actions, and unresolved items through a printable page | AC25–AC26 |
+| ID  | Capability                         | Required behavior                                                                                             | Acceptance reference |
+| --- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------- |
+| F01 | Email classification and task list | Classify five email categories; route document-comparison requests to the checking workflow                   | AC01–AC03            |
+| F02 | Four-format document reading       | Read TXT, PDF, DOCX, and XLSX; distinguish usable text, no usable text, and parsing failure                   | AC04–AC06            |
+| F03 | Seven-field comparison             | Show SI and BL values side by side, normalize conservatively, and identify field-level findings               | AC07–AC10            |
+| F04 | Source evidence                    | Provide format-appropriate source references and original excerpts                                            | AC11–AC12            |
+| F05 | Exceptions and human review        | Identify the four challenge exception reasons; allow attributable confirmation or correction                  | AC13–AC17            |
+| F06 | Revised-document recheck           | Recheck all seven fields and show resolved, persistent, and new discrepancies                                 | AC18–AC21            |
+| F07 | Vision-assisted scanned documents  | Obtain actual Gemini candidates; require human confirmation before completing the check                       | AC22–AC24            |
+| F08 | Printable report                   | Export the current comparison, source versions, review actions, and unresolved items through a printable page | AC25–AC26            |
+| F09 | Copy-only amendment draft          | Lock reviewed issues while Gemini or a standard template supplies reviewer-editable wording                   | AC31–AC34            |
 
 ## 5. User experience
 
@@ -117,6 +118,7 @@ Use text labels as well as color. “Needs review,” “Missing document,” an
 8. Upload a revised SI or BL and rerun all seven checks.
 9. Confirm review of the current version when all required items are resolved.
 10. Print or save the report as PDF.
+11. When the current run has unresolved action items, optionally prepare and copy a source-backed amendment request for manual sending.
 
 ### 5.3 No-login demo identity
 
@@ -146,12 +148,12 @@ Accept `.txt`, `.pdf`, `.docx`, and `.xlsx` only. Validate content sufficiently 
 
 For each uploaded version, retain role, original filename, detected format, content hash, object-storage reference, creation time, and its task association.
 
-| Format | Initial parser | Evidence unit |
-|---|---|---|
-| TXT | Standard text decoding | Line number and original excerpt |
-| PDF | pypdf | Page number and extracted excerpt |
-| DOCX | python-docx | Paragraph index or table / row / cell reference |
-| XLSX | openpyxl | Sheet name and cell coordinates |
+| Format | Initial parser         | Evidence unit                                   |
+| ------ | ---------------------- | ----------------------------------------------- |
+| TXT    | Standard text decoding | Line number and original excerpt                |
+| PDF    | pypdf                  | Page number and extracted excerpt               |
+| DOCX   | python-docx            | Paragraph index or table / row / cell reference |
+| XLSX   | openpyxl               | Sheet name and cell coordinates                 |
 
 - Preserve extraction units instead of flattening away all source references.
 - A PDF with no useful text is a candidate for visual processing, not automatically a readable scan.
@@ -166,15 +168,15 @@ For each uploaded version, retain role, original filename, detected format, cont
 
 The seven fields are:
 
-| Field | Meaning | Normalized type |
-|---|---|---|
-| `shipper` | Shipment sender | String |
-| `consignee` | Named consignee | String |
-| `notify_party` | Arrival-notification recipient | String |
-| `port_of_loading` | Loading port | String |
-| `port_of_discharge` | Discharge port | String |
-| `container_count` | Number of containers, not packages or container IDs | Non-negative integer represented consistently |
-| `gross_weight_kg` | Total gross weight in kilograms | Exact decimal representation |
+| Field               | Meaning                                             | Normalized type                               |
+| ------------------- | --------------------------------------------------- | --------------------------------------------- |
+| `shipper`           | Shipment sender                                     | String                                        |
+| `consignee`         | Named consignee                                     | String                                        |
+| `notify_party`      | Arrival-notification recipient                      | String                                        |
+| `port_of_loading`   | Loading port                                        | String                                        |
+| `port_of_discharge` | Discharge port                                      | String                                        |
+| `container_count`   | Number of containers, not packages or container IDs | Non-negative integer represented consistently |
+| `gross_weight_kg`   | Total gross weight in kilograms                     | Exact decimal representation                  |
 
 Rules are the default extraction path. Gemini text extraction is used only when the source may contain the required information but rules cannot reliably locate or interpret it. Explicit missing values are not a request for the model to invent a value.
 
@@ -211,12 +213,12 @@ Each extracted value must reference the specific document version and an evidenc
 
 Challenge exception reasons:
 
-| Reason | Example | Required next action |
-|---|---|---|
-| `wrong_doc_type` | An invoice or packing list supplied as a BL | Replace or reassign the document |
-| `missing_attachment` | SI or BL absent from a comparison request | Upload the missing source |
-| `unreadable` | Corrupt file or unconfirmed visual reading | Replace the file or review a usable visual candidate |
-| `missing_value` | SI weight is `N/A` | Supply an authoritative value with provenance or upload a revised source |
+| Reason               | Example                                     | Required next action                                                     |
+| -------------------- | ------------------------------------------- | ------------------------------------------------------------------------ |
+| `wrong_doc_type`     | An invoice or packing list supplied as a BL | Replace or reassign the document                                         |
+| `missing_attachment` | SI or BL absent from a comparison request   | Upload the missing source                                                |
+| `unreadable`         | Corrupt file or unconfirmed visual reading  | Replace the file or review a usable visual candidate                     |
+| `missing_value`      | SI weight is `N/A`                          | Supply an authoritative value with provenance or upload a revised source |
 
 Maintain a list of reasons internally when multiple conditions apply. Technical service failures such as a Gemini timeout also have explicit operational error codes; do not mislabel them as a confirmed document defect.
 
@@ -270,16 +272,25 @@ The printable report includes:
 
 Report printing must exclude navigation and interactive controls. Historical reports must visibly identify themselves as historical.
 
+### F09 — Reviewer-controlled amendment draft (demo enhancement)
+
+- Offer the action only for an unfinished local task's current successful SI/draft-BL comparison when at least one item requires action. Samples, historical runs, stale revisions, completed runs, and clean comparisons cannot generate a draft.
+- Build the issue list deterministically from the current reviewed result and review requirements, in the fixed seven-field order. Confirmed mismatches include both source values; missing, unreadable, ambiguous, supplied, and pending-review states request the appropriate clarification or replacement without treating an unconfirmed candidate as fact.
+- Gemini receives only the original email subject, issue count, and issue types. It may polish the English subject, opening, and closing, but never receives source excerpts or field values and cannot change the locked issue list.
+- Provider failure is explicit and does not overwrite a saved draft. A reviewer may retry Gemini or deliberately choose a clearly labeled standard template.
+- Bind the latest draft to exact task, revision, and run. A source revision, current-run change, review-fact change, or completion invalidates it. Editable wording is saved locally; the evidence-backed issue list is read only.
+- Copy a plain-text email containing recipient, subject, opening, locked issue list, and closing. The application never invokes an email client or sends a network email.
+
 ## 7. State model and invariants
 
 Do not overload a single status with processing, comparison, and human-review meaning.
 
-| Dimension | Values |
-|---|---|
-| Processing | `IDLE`, `RUNNING`, `SUCCEEDED`, `FAILED` |
-| Workflow | `NOT_APPLICABLE`, `WAITING_DOCUMENT`, `READY`, `REVIEW_REQUIRED`, `DISCREPANCIES_FOUND`, `CHECK_COMPLETE` |
-| Per-field finding | `MATCH`, `MISMATCH`, `NEEDS_REVIEW`, `NOT_CHECKED` |
-| Review | Pending requirements, immutable actions, optional completion acknowledgment for an exact run/revision |
+| Dimension         | Values                                                                                                    |
+| ----------------- | --------------------------------------------------------------------------------------------------------- |
+| Processing        | `IDLE`, `RUNNING`, `SUCCEEDED`, `FAILED`                                                                  |
+| Workflow          | `NOT_APPLICABLE`, `WAITING_DOCUMENT`, `READY`, `REVIEW_REQUIRED`, `DISCREPANCIES_FOUND`, `CHECK_COMPLETE` |
+| Per-field finding | `MATCH`, `MISMATCH`, `NEEDS_REVIEW`, `NOT_CHECKED`                                                        |
+| Review            | Pending requirements, immutable actions, optional completion acknowledgment for an exact run/revision     |
 
 The UI derives workflow from current results and outstanding requirements. If discrepancies and review requirements coexist, show both counts; use `REVIEW_REQUIRED` as the primary action state without hiding discrepancies.
 
@@ -299,15 +310,16 @@ These contracts define the shared frontend/backend language. Database normalizat
 
 ### 8.1 Entities
 
-| Entity | Required attributes |
-|---|---|
-| Demo session | ID, hashed capability/token identifier, created time, expiration |
-| Task | ID, owner session or sample-baseline marker, email metadata, category/method, current revision, current SI/BL IDs, current run ID |
-| Document version | ID, task ID, role, version, original filename, format, byte count, SHA-256, private object key, creation time |
-| Analysis run | ID, task ID, revision snapshot, SI/BL IDs, pipeline version, model/prompt metadata where used, start/end, processing state, machine result, timing/error details |
-| Field result | Field key, SI extraction, BL extraction, finding, reason, normalization rule |
-| Review event | ID, task/run/revision, document/field, action type, old/new values, evidence or supplied provenance, actor designation, timestamp |
-| Completion acknowledgment | Task/run/revision, timestamp, unverified demo-session actor |
+| Entity                    | Required attributes                                                                                                                                              |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Demo session              | ID, hashed capability/token identifier, created time, expiration                                                                                                 |
+| Task                      | ID, owner session or sample-baseline marker, email metadata, category/method, current revision, current SI/BL IDs, current run ID                                |
+| Document version          | ID, task ID, role, version, original filename, format, byte count, SHA-256, private object key, creation time                                                    |
+| Analysis run              | ID, task ID, revision snapshot, SI/BL IDs, pipeline version, model/prompt metadata where used, start/end, processing state, machine result, timing/error details |
+| Field result              | Field key, SI extraction, BL extraction, finding, reason, normalization rule                                                                                     |
+| Review event              | ID, task/run/revision, document/field, action type, old/new values, evidence or supplied provenance, actor designation, timestamp                                |
+| Completion acknowledgment | Task/run/revision, timestamp, unverified demo-session actor                                                                                                      |
+| Amendment draft           | Task/run/revision, recipient, editable wording, deterministic issue list and hash, generation method, nullable provider metadata, user-edited flag, timestamps   |
 
 Runs and document versions are immutable once finalized. Store only the current pointers on the task; advance them with a revision check. JSONB is sufficient for the bounded seven-field result; do not add vector storage.
 
@@ -321,15 +333,17 @@ Runs and document versions are immutable once finalized. Store only the current 
   "value_state": "PRESENT",
   "method": "rule",
   "requires_human_confirmation": false,
-  "evidence": [{
-    "document_id": "<immutable-document-id>",
-    "page": 1,
-    "line": 29,
-    "sheet": null,
-    "cell": null,
-    "excerpt": "<exact excerpt returned by the parser>",
-    "verified": true
-  }]
+  "evidence": [
+    {
+      "document_id": "<immutable-document-id>",
+      "page": 1,
+      "line": 29,
+      "sheet": null,
+      "cell": null,
+      "excerpt": "<exact excerpt returned by the parser>",
+      "verified": true
+    }
+  ]
 }
 ```
 
@@ -362,23 +376,25 @@ Keep challenge export separate from the richer product state:
 
 Use `/api/v1` for product endpoints. Except session creation and read-only sample endpoints, requests require the demo-session capability. Secrets used to access Supabase or Gemini are never accepted from or returned to the browser.
 
-| Method / endpoint | Purpose |
-|---|---|
-| `GET /health` | Process health and non-sensitive capability flags |
-| `POST /api/v1/sessions` | Issue an expiring demo-session capability |
-| `GET /api/v1/samples` | Read sample tasks and labeled precomputed results |
-| `POST /api/v1/tasks` | Create a session-owned task or clone a sample |
-| `GET /api/v1/tasks` | List current session tasks |
-| `GET /api/v1/tasks/{task_id}` | Read task, current versions, and current result |
-| `POST /api/v1/tasks/{task_id}/uploads` | Validate upload metadata and issue a scoped Storage upload authorization |
-| `POST /api/v1/tasks/{task_id}/documents` | Verify uploaded object and attach an immutable SI/BL version with expected revision |
-| `POST /api/v1/tasks/{task_id}/classify` | Run rule/Gemini email classification |
-| `POST /api/v1/tasks/{task_id}/analyze` | Synchronously analyze the selected current pair, requiring expected revision |
-| `GET /api/v1/tasks/{task_id}/runs/{run_id}` | Read a current or historical run belonging to the task |
-| `POST /api/v1/tasks/{task_id}/reviews` | Record a candidate confirmation, extraction correction, or supplied information with evidence |
-| `POST /api/v1/tasks/{task_id}/complete` | Acknowledge an eligible current run; reject unresolved or stale runs |
-| `GET /api/v1/tasks/{task_id}/documents/{document_id}/access` | Issue short-lived read access after ownership validation |
-| `GET /api/v1/tasks/{task_id}/report` | Return structured report content for the printable frontend view |
+| Method / endpoint                                            | Purpose                                                                                       |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `GET /health`                                                | Process health and non-sensitive capability flags                                             |
+| `POST /api/v1/sessions`                                      | Issue an expiring demo-session capability                                                     |
+| `GET /api/v1/samples`                                        | Read sample tasks and labeled precomputed results                                             |
+| `POST /api/v1/tasks`                                         | Create a session-owned task or clone a sample                                                 |
+| `GET /api/v1/tasks`                                          | List current session tasks                                                                    |
+| `GET /api/v1/tasks/{task_id}`                                | Read task, current versions, and current result                                               |
+| `POST /api/v1/tasks/{task_id}/uploads`                       | Validate upload metadata and issue a scoped Storage upload authorization                      |
+| `POST /api/v1/tasks/{task_id}/documents`                     | Verify uploaded object and attach an immutable SI/BL version with expected revision           |
+| `POST /api/v1/tasks/{task_id}/classify`                      | Run rule/Gemini email classification                                                          |
+| `POST /api/v1/tasks/{task_id}/analyze`                       | Synchronously analyze the selected current pair, requiring expected revision                  |
+| `GET /api/v1/tasks/{task_id}/runs/{run_id}`                  | Read a current or historical run belonging to the task                                        |
+| `POST /api/v1/tasks/{task_id}/reviews`                       | Record a candidate confirmation, extraction correction, or supplied information with evidence |
+| `POST /api/v1/tasks/{task_id}/complete`                      | Acknowledge an eligible current run; reject unresolved or stale runs                          |
+| `POST /api/v1/tasks/{task_id}/amendment-draft`               | Generate Gemini-polished or standard wording for the exact current actionable run             |
+| `PUT /api/v1/tasks/{task_id}/amendment-draft/{draft_id}`     | Save recipient and wording only; reject stale facts/revision/run                              |
+| `GET /api/v1/tasks/{task_id}/documents/{document_id}/access` | Issue short-lived read access after ownership validation                                      |
+| `GET /api/v1/tasks/{task_id}/report`                         | Return structured report content for the printable frontend view                              |
 
 The initial development probe may expose a bounded `POST /api/v1/dev/extract` multipart endpoint. It must be labeled as development-only, disabled by default in production, and is not a substitute for session-owned persistence or the public deployment gate.
 
@@ -465,38 +481,42 @@ Public frontend configuration may contain `VITE_API_BASE_URL`; never place provi
 
 Tests below are required behavior, not completed test results. Use real fixtures where specified and mark team-created fixtures explicitly.
 
-| ID | Given / when | Then |
-|---|---|---|
-| AC01 | Representative emails from all five categories are processed | Category and actual decision method are recorded; only comparison tasks enter field checking |
-| AC02 | An inconclusive email requires Gemini, but the provider is unavailable | Visible failure/retry state; no fabricated successful classification |
-| AC03 | A request is waiting for a draft | UI shows waiting for the document with incomplete coverage, not seven matches |
-| AC04 | The real `email_160_SI.pdf` is parsed online | Seven fields and source references are returned and saved |
-| AC05 | `email_055_SI.xlsx` and `email_055_BL.docx` are processed | Both formats parse; grouping punctuation in weight does not create a false discrepancy |
-| AC06 | A corrupt PDF or a no-text PDF is processed | Parsing failure and visual-reading candidate are distinguished; neither silently becomes a clean result |
-| AC07 | Original `email_004` is compared | Exactly consignee and notify_party are the known mismatches in the seven-field scope |
-| AC08 | `243588` and `243,588` are compared in unambiguous kg context | Match after documented normalization, with both originals preserved |
-| AC09 | Individual-container weights and an explicit total occur together | Total gross weight is selected; ambiguous or conflicting totals require review |
-| AC10 | One field mismatches and another is missing | Both the known discrepancy and the unresolved requirement remain visible |
-| AC11 | A user opens evidence for a field | The locator refers to the correct immutable source version and actual excerpt |
-| AC12 | A Gemini text quote cannot be located in the source | It cannot support automatic completion; mark the affected result for review |
-| AC13 | An invoice is supplied as the BL | Report wrong_doc_type and require replacement, regardless of filename |
-| AC14 | A comparison request lacks an attachment | Identify the missing role and prevent completion |
-| AC15 | Real `email_516` is processed | SI weight remains missing; BL 235,550 KG is not copied into SI; missing_value requires review |
-| AC16 | A reviewer corrects a misread source value | Preserve the machine output, store evidence and review action, and recompute results |
-| AC17 | A reviewer supplies a value absent from the source | Label it as supplied information; require checkable provenance or a replacement source before resolution |
-| AC18 | Team-created email_004 BL v2 fixes two names but changes weight to 130,058 KG | Show two resolved discrepancies and one new gross-weight discrepancy |
-| AC19 | Team-created BL v3 restores weight to 131,058 KG and all seven fields are consistent | Current version is eligible for completion after required review |
-| AC20 | An older run completes after a newer revision exists | Older result is historical and cannot overwrite the current result |
-| AC21 | A source changes after completion or a stale review is submitted | Old completion is not reused; stale review/completion request returns conflict |
-| AC22 | A real image-only PDF is sent through Gemini | Actual visual candidates are shown alongside the source and marked unconfirmed |
-| AC23 | Visual candidates match but have not been confirmed | Task remains NEEDS_REVIEW; self-reported model confidence cannot bypass review |
-| AC24 | Required visual candidates are confirmed or corrected | Reviewed result is recomputed; original pre-review machine result remains exportable |
-| AC25 | The current report is printed | Version references, findings, evidence, unresolved items, and review designation are readable |
-| AC26 | A historical report is opened | Historical status is clear and it cannot be mistaken for the current check |
-| AC27 | Another demo session requests a private task/file | Access is denied; shared baseline data remains unmodified |
-| AC28 | A saved task is reopened after page refresh | Persisted current result is recovered; no fake completion for a failed/unsaved request |
-| AC29 | The submitted URL is opened in a fresh browser session | The demo is accessible without registration or platform login |
-| AC30 | AI usage and timings are displayed | Numbers come from actual stage logs; precomputed/cached results are labeled |
+| ID   | Given / when                                                                         | Then                                                                                                              |
+| ---- | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| AC01 | Representative emails from all five categories are processed                         | Category and actual decision method are recorded; only comparison tasks enter field checking                      |
+| AC02 | An inconclusive email requires Gemini, but the provider is unavailable               | Visible failure/retry state; no fabricated successful classification                                              |
+| AC03 | A request is waiting for a draft                                                     | UI shows waiting for the document with incomplete coverage, not seven matches                                     |
+| AC04 | The real `email_160_SI.pdf` is parsed online                                         | Seven fields and source references are returned and saved                                                         |
+| AC05 | `email_055_SI.xlsx` and `email_055_BL.docx` are processed                            | Both formats parse; grouping punctuation in weight does not create a false discrepancy                            |
+| AC06 | A corrupt PDF or a no-text PDF is processed                                          | Parsing failure and visual-reading candidate are distinguished; neither silently becomes a clean result           |
+| AC07 | Original `email_004` is compared                                                     | Exactly consignee and notify_party are the known mismatches in the seven-field scope                              |
+| AC08 | `243588` and `243,588` are compared in unambiguous kg context                        | Match after documented normalization, with both originals preserved                                               |
+| AC09 | Individual-container weights and an explicit total occur together                    | Total gross weight is selected; ambiguous or conflicting totals require review                                    |
+| AC10 | One field mismatches and another is missing                                          | Both the known discrepancy and the unresolved requirement remain visible                                          |
+| AC11 | A user opens evidence for a field                                                    | The locator refers to the correct immutable source version and actual excerpt                                     |
+| AC12 | A Gemini text quote cannot be located in the source                                  | It cannot support automatic completion; mark the affected result for review                                       |
+| AC13 | An invoice is supplied as the BL                                                     | Report wrong_doc_type and require replacement, regardless of filename                                             |
+| AC14 | A comparison request lacks an attachment                                             | Identify the missing role and prevent completion                                                                  |
+| AC15 | Real `email_516` is processed                                                        | SI weight remains missing; BL 235,550 KG is not copied into SI; missing_value requires review                     |
+| AC16 | A reviewer corrects a misread source value                                           | Preserve the machine output, store evidence and review action, and recompute results                              |
+| AC17 | A reviewer supplies a value absent from the source                                   | Label it as supplied information; require checkable provenance or a replacement source before resolution          |
+| AC18 | Team-created email_004 BL v2 fixes two names but changes weight to 130,058 KG        | Show two resolved discrepancies and one new gross-weight discrepancy                                              |
+| AC19 | Team-created BL v3 restores weight to 131,058 KG and all seven fields are consistent | Current version is eligible for completion after required review                                                  |
+| AC20 | An older run completes after a newer revision exists                                 | Older result is historical and cannot overwrite the current result                                                |
+| AC21 | A source changes after completion or a stale review is submitted                     | Old completion is not reused; stale review/completion request returns conflict                                    |
+| AC22 | A real image-only PDF is sent through Gemini                                         | Actual visual candidates are shown alongside the source and marked unconfirmed                                    |
+| AC23 | Visual candidates match but have not been confirmed                                  | Task remains NEEDS_REVIEW; self-reported model confidence cannot bypass review                                    |
+| AC24 | Required visual candidates are confirmed or corrected                                | Reviewed result is recomputed; original pre-review machine result remains exportable                              |
+| AC25 | The current report is printed                                                        | Version references, findings, evidence, unresolved items, and review designation are readable                     |
+| AC26 | A historical report is opened                                                        | Historical status is clear and it cannot be mistaken for the current check                                        |
+| AC27 | Another demo session requests a private task/file                                    | Access is denied; shared baseline data remains unmodified                                                         |
+| AC28 | A saved task is reopened after page refresh                                          | Persisted current result is recovered; no fake completion for a failed/unsaved request                            |
+| AC29 | The submitted URL is opened in a fresh browser session                               | The demo is accessible without registration or platform login                                                     |
+| AC30 | AI usage and timings are displayed                                                   | Numbers come from actual stage logs; precomputed/cached results are labeled                                       |
+| AC31 | Current `email_004` v1 has two confirmed name mismatches                             | A copy-only draft lists Consignee and Notify party with both source values; Gemini changes wording only           |
+| AC32 | Current `email_516` has missing SI gross weight and BL 235,550 KG                    | The draft requests corrected SI evidence and never presents the BL value as an SI fact                            |
+| AC33 | A saved amendment draft is refreshed, edited, or followed by a new revision          | Same-run wording is restored after refresh; edits preserve locked facts; a new revision invalidates the old draft |
+| AC34 | Gemini amendment wording fails                                                       | Existing draft is preserved; retry and an explicit standard-template fallback are available; nothing is sent      |
 
 ## 13. Evaluation and measurement
 
@@ -511,18 +531,18 @@ Tests below are required behavior, not completed test results. Use real fixtures
 
 ### 13.2 Metrics
 
-| Metric | Definition |
-|---|---|
-| Classification | Accuracy and per-category precision/recall/F1 on the declared sample set |
-| Field extraction | Correct canonical values, with missing and ambiguous cases reported separately |
-| Discrepancy detection | Field-level false positives, false negatives, and exact defect-set matches |
-| Review handling | Correct escalation for each exception reason and scan-confirmation policy |
-| False completion | Cases marked complete despite unresolved missing data, evidence, discrepancies, or required review |
-| Evidence validity | Values whose declared source references can actually be checked |
-| Revision correctness | Expected resolved/new/persistent findings and rejection of stale completion |
-| Performance | Parser, model, storage, and end-to-end timings; include sample count and distribution |
-| AI usage | Actual model calls/tokens per stage and fraction of whole tasks with no model calls |
-| Operational value | Timed internal task completion and remaining manual actions; identify participants and sample size |
+| Metric                | Definition                                                                                         |
+| --------------------- | -------------------------------------------------------------------------------------------------- |
+| Classification        | Accuracy and per-category precision/recall/F1 on the declared sample set                           |
+| Field extraction      | Correct canonical values, with missing and ambiguous cases reported separately                     |
+| Discrepancy detection | Field-level false positives, false negatives, and exact defect-set matches                         |
+| Review handling       | Correct escalation for each exception reason and scan-confirmation policy                          |
+| False completion      | Cases marked complete despite unresolved missing data, evidence, discrepancies, or required review |
+| Evidence validity     | Values whose declared source references can actually be checked                                    |
+| Revision correctness  | Expected resolved/new/persistent findings and rejection of stale completion                        |
+| Performance           | Parser, model, storage, and end-to-end timings; include sample count and distribution              |
+| AI usage              | Actual model calls/tokens per stage and fraction of whole tasks with no model calls                |
+| Operational value     | Timed internal task completion and remaining manual actions; identify participants and sample size |
 
 Rule processing has zero LLM token cost, not necessarily zero operating cost. Do not publish the illustrative “94% rules / 6% AI / 40 ms” values without measurement.
 
@@ -530,16 +550,16 @@ The bundled `scoring.py` is a self-evaluation tool. Current challenge/rubric mat
 
 ## 14. Demo script: 4:30 target
 
-| Time | Action | Intended proof |
-|---|---|---|
-| 0:00–0:20 | Explain mixed inboxes and repeated draft corrections | Clear user and job |
-| 0:20–0:40 | Open the no-login inbox and choose a comparison | Accessible working entry point |
-| 0:40–1:35 | Compare original email_004 and open evidence | Two actual discrepancies, with verifiable sources |
-| 1:35–2:35 | Upload constructed BL v2, then corrected v3 | Fixing earlier errors can introduce a new one; all seven fields are rechecked |
-| 2:35–3:00 | Open email_516 | Missing SI data is not invented from BL |
-| 3:00–3:35 | Run or clearly identify a prior real Gemini scan result; confirm a candidate | Actual vision assistance with a human decision boundary |
-| 3:35–4:05 | Show architecture and measured validation | Meaningful integration and reproducible evidence |
-| 4:05–4:30 | Print report, state measured value and next steps | Usable handover and credible scope |
+| Time      | Action                                                                       | Intended proof                                                                |
+| --------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| 0:00–0:20 | Explain mixed inboxes and repeated draft corrections                         | Clear user and job                                                            |
+| 0:20–0:40 | Open the no-login inbox and choose a comparison                              | Accessible working entry point                                                |
+| 0:40–1:35 | Compare original email_004 and open evidence                                 | Two actual discrepancies, with verifiable sources                             |
+| 1:35–2:35 | Upload constructed BL v2, then corrected v3                                  | Fixing earlier errors can introduce a new one; all seven fields are rechecked |
+| 2:35–3:00 | Open email_516                                                               | Missing SI data is not invented from BL                                       |
+| 3:00–3:35 | Run or clearly identify a prior real Gemini scan result; confirm a candidate | Actual vision assistance with a human decision boundary                       |
+| 3:35–4:05 | Show architecture and measured validation                                    | Meaningful integration and reproducible evidence                              |
+| 4:05–4:30 | Print report, state measured value and next steps                            | Usable handover and credible scope                                            |
 
 Original email_004 values: SI consignee/notify `EAST BRIGHT FZ-LLC`; BL consignee/notify `UAB NOVAKOPA`; both weights `131,058 KG`.
 
@@ -551,26 +571,26 @@ The video may use edits to remove waiting, with honest timing labels. Precompute
 
 ## 15. Judging evidence allocation
 
-| Criterion | Maximum | Primary evidence |
-|---|---:|---|
-| System Design & Architecture | 15 | Implemented data flow, source/result version binding, synchronous boundaries, portable deployment |
-| Working Core Prototype | 25 | Public end-to-end workflow including review, revision, and report |
-| Technology Integration | 15 | Actual parser/rule/Gemini/storage execution trace and visual-candidate handling |
-| Technical Feasibility & Validation | 15 | Frozen test manifests, acceptance tests, measured errors and timings |
-| Problem Statement Understanding | 10 | Correct handling of missing sources, draft revisions, and human responsibilities |
-| Innovation & Solution Approach | 10 | Revision-change findings and explicit evidence-based confirmation behavior |
-| Practical Value & Potential | 10 | Measured manual effort, usable reports, and a realistic mailbox-integration path |
+| Criterion                          | Maximum | Primary evidence                                                                                  |
+| ---------------------------------- | ------: | ------------------------------------------------------------------------------------------------- |
+| System Design & Architecture       |      15 | Implemented data flow, source/result version binding, synchronous boundaries, portable deployment |
+| Working Core Prototype             |      25 | Public end-to-end workflow including review, revision, and report                                 |
+| Technology Integration             |      15 | Actual parser/rule/Gemini/storage execution trace and visual-candidate handling                   |
+| Technical Feasibility & Validation |      15 | Frozen test manifests, acceptance tests, measured errors and timings                              |
+| Problem Statement Understanding    |      10 | Correct handling of missing sources, draft revisions, and human responsibilities                  |
+| Innovation & Solution Approach     |      10 | Revision-change findings and explicit evidence-based confirmation behavior                        |
+| Practical Value & Potential        |      10 | Measured manual effort, usable reports, and a realistic mailbox-integration path                  |
 
 These are maximum criterion weights, not promised scores. The same numerical result or demo clip is not presented as the sole proof for several independent criteria. Human review is already encouraged by the challenge; do not market it as automatic innovation points or a globally novel invention.
 
 ## 16. Delivery plan and ownership
 
-| Owner | Primary work | Integration responsibility |
-|---|---|---|
-| A — Extraction and AI | Parsers, rule extraction, Gemini semantic/visual paths | Shared extraction schema; real PDF and scan fixtures |
-| B — Backend and deployment | FastAPI, Supabase, session access, synchronous runs, version writes | First online deployment gate and persistence |
-| C — Frontend | Inbox, comparison, evidence panels, review, revision display, print styles | Real API integration, busy/error states, fresh-session accessibility |
-| D — Validation and submission | Regression runner, fixtures, acceptance evidence, README, slides, video | Test from the first slice; reproduce claimed metrics and maintain demo narrative |
+| Owner                         | Primary work                                                               | Integration responsibility                                                       |
+| ----------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| A — Extraction and AI         | Parsers, rule extraction, Gemini semantic/visual paths                     | Shared extraction schema; real PDF and scan fixtures                             |
+| B — Backend and deployment    | FastAPI, Supabase, session access, synchronous runs, version writes        | First online deployment gate and persistence                                     |
+| C — Frontend                  | Inbox, comparison, evidence panels, review, revision display, print styles | Real API integration, busy/error states, fresh-session accessibility             |
+| D — Validation and submission | Regression runner, fixtures, acceptance evidence, README, slides, video    | Test from the first slice; reproduce claimed metrics and maintain demo narrative |
 
 ### Milestones
 
@@ -592,16 +612,16 @@ Plan to freeze new features on the evening of 21 September and use the morning o
 
 ## 17. Risks and decisions
 
-| Risk | Decision / response |
-|---|---|
-| Python deployment or parser dependencies fail on Vercel | Validate early with real documents; switch backend to prepared Cloud Run container if blocked |
-| AI calls hit quota or timeouts | Bounded calls, visible failures, manual retry; never fabricate output |
-| Rule accuracy reflects generator templates only | Declare evaluation distribution; test unknown labels and explicit edge cases |
-| Removing login exposes mutable shared data | Read-only baselines, session-owned tasks, backend ownership checks, private Storage |
-| Synchronous work exceeds runtime limits | Bound document size/pages and provider duration; preserve visible failure instead of adding hidden background work |
-| Source coordinates are unreliable | Promise page/excerpt-level evidence first; do not invent precision |
-| Manual review hides extraction errors in metrics | Separate pre-review machine results and reviewed outcomes |
-| Scope grows again | Any new feature replaces existing scope or moves to roadmap; do not silently add queues, memory, or account systems |
+| Risk                                                    | Decision / response                                                                                                 |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Python deployment or parser dependencies fail on Vercel | Validate early with real documents; switch backend to prepared Cloud Run container if blocked                       |
+| AI calls hit quota or timeouts                          | Bounded calls, visible failures, manual retry; never fabricate output                                               |
+| Rule accuracy reflects generator templates only         | Declare evaluation distribution; test unknown labels and explicit edge cases                                        |
+| Removing login exposes mutable shared data              | Read-only baselines, session-owned tasks, backend ownership checks, private Storage                                 |
+| Synchronous work exceeds runtime limits                 | Bound document size/pages and provider duration; preserve visible failure instead of adding hidden background work  |
+| Source coordinates are unreliable                       | Promise page/excerpt-level evidence first; do not invent precision                                                  |
+| Manual review hides extraction errors in metrics        | Separate pre-review machine results and reviewed outcomes                                                           |
+| Scope grows again                                       | Any new feature replaces existing scope or moves to roadmap; do not silently add queues, memory, or account systems |
 
 ## 18. Inputs still needed for deployment
 
@@ -616,11 +636,11 @@ Do not paste secrets into the PRD, repository, demo video, or chat. Missing conf
 
 ## 19. Sources and traceability
 
-- [Agreed reduced scope](</Users/jiale/Workspace/Hackathon/averis/docs/solution-confirmation.md>).
+- [Agreed reduced scope](/Users/jiale/Workspace/Hackathon/averis/docs/solution-confirmation.md).
 - [Official use case](</Users/jiale/Workspace/Hackathon/averis/problem-statement/Shipping Document Verification Use Case.pdf>).
 - [Preliminary judging rubric](</Users/jiale/Workspace/Hackathon/averis/problem-statement/Averis x Monash Hackathon 2026 - Preliminary Judging Rubric .md>).
 - [Rules and submission requirements](</Users/jiale/Workspace/Hackathon/averis/problem-statement/Averis x Monash Hackathon Rules and Regulations.pdf>).
-- [Scoring implementation](</Users/jiale/Workspace/Hackathon/averis/problem-statement/sdoc-hackathon-docker/server/scoring.py>).
+- [Scoring implementation](/Users/jiale/Workspace/Hackathon/averis/problem-statement/sdoc-hackathon-docker/server/scoring.py).
 - [FastAPI file uploads](https://fastapi.tiangolo.com/tutorial/request-files/), [Vite environment variables](https://vite.dev/guide/env-and-mode).
 - [pypdf extraction limitations](https://pypdf.readthedocs.io/en/stable/user/extract-text.html), [Gemini document processing](https://ai.google.dev/gemini-api/docs/document-processing).
 - [Supabase data access](https://supabase.com/docs/guides/database/secure-data), [Vercel FastAPI](https://vercel.com/docs/frameworks/backend/fastapi), [Cloud Run container contract](https://docs.cloud.google.com/run/docs/container-contract).

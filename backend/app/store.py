@@ -41,8 +41,11 @@ def encode(value) -> str:
 
 
 class Store(TaskStoreMixin):
-    def __init__(self, directory: Path, run_service: RunService | None = None):
+    def __init__(
+        self, directory: Path, run_service: RunService | None = None, amendment_provider=None
+    ):
         self.run_service = run_service
+        self.amendment_provider = amendment_provider
         self._service_lock = threading.Lock()
         self._owns_service = run_service is None
         self.directory = directory.resolve()
@@ -101,6 +104,15 @@ class Store(TaskStoreMixin):
                 CREATE TRIGGER IF NOT EXISTS immutable_completion_delete
                     BEFORE DELETE ON completion_acknowledgments
                     BEGIN SELECT RAISE(ABORT, 'Completion acknowledgments are append-only'); END;
+                CREATE TABLE IF NOT EXISTS amendment_drafts (
+                    id TEXT PRIMARY KEY, task_id TEXT NOT NULL UNIQUE REFERENCES emails(id),
+                    revision INTEGER NOT NULL, run_id TEXT NOT NULL REFERENCES runs(id),
+                    recipient TEXT NOT NULL, subject TEXT NOT NULL, opening TEXT NOT NULL,
+                    closing TEXT NOT NULL, issue_items TEXT NOT NULL, facts_hash TEXT NOT NULL,
+                    generation_method TEXT NOT NULL, provider_call TEXT,
+                    user_edited INTEGER NOT NULL,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                );
             """)
             review_columns = {row[1]: row for row in db.execute("PRAGMA table_info(review_events)")}
             if "provenance_source" not in review_columns:
@@ -367,6 +379,31 @@ class Store(TaskStoreMixin):
             "SELECT * FROM completion_acknowledgments WHERE run_id=?", (run_id,)
         ).fetchone()
         return dict(row) if row else None
+
+    def _amendment_draft(self, db, email):
+        if email.get("record_kind") != "task" or not email.get("current_run_id"):
+            return None
+        row = db.execute(
+            "SELECT * FROM amendment_drafts WHERE task_id=? AND revision=? AND run_id=?",
+            (email["id"], email["revision"], email["current_run_id"]),
+        ).fetchone()
+        if not row:
+            return None
+        draft = dict(row)
+        run = self._run(db, email["current_run_id"])
+        if not run or run["status"] != "SUCCEEDED" or self._completion(db, run["id"]):
+            return None
+        reviewed, _ = apply_review_overlay(run["result"], self._review_actions(db, run["id"]))
+        from app.documents.amendment import build_issue_items, facts_hash
+
+        if draft["facts_hash"] != facts_hash(build_issue_items(reviewed)):
+            return None
+        draft["issue_items"] = json.loads(draft["issue_items"])
+        draft["provider_call"] = (
+            json.loads(draft["provider_call"]) if draft["provider_call"] else None
+        )
+        draft["user_edited"] = bool(draft["user_edited"])
+        return draft
 
     def _public_run(self, db, run):
         if not run:
@@ -656,6 +693,7 @@ class Store(TaskStoreMixin):
                 "current_run": self._public_run(db, self._run(db, email["current_run_id"])),
                 "latest_run": self._public_run(db, self._run(db, email["latest_run_id"])),
                 "runs": [dict(row) for row in runs],
+                "amendment_draft": self._amendment_draft(db, email),
             }
 
     def get_document(self, email_id, document_id):

@@ -467,6 +467,190 @@ class TaskStoreMixin:
                 )
         return self.task_detail(task_id)
 
+    def _amendment_context(self, db, task_id, expected_revision, run_id):
+        from app.documents.amendment import build_issue_items, facts_hash
+        from app.documents.reviews import apply_review_overlay
+        from app.store import StoreError
+
+        task = self._email(db, task_id)
+        if task["record_kind"] != "task":
+            raise StoreError(
+                "sample_read_only",
+                "Create a local working copy before drafting an amendment email.",
+                409,
+            )
+        if task["revision"] != expected_revision:
+            raise StoreError("stale_revision", "The sources changed. Refresh before drafting.", 409)
+        run = self._run(db, run_id)
+        if (
+            not run
+            or run["email_id"] != task_id
+            or run["status"] != "SUCCEEDED"
+            or run["revision"] != task["revision"]
+            or task["current_run_id"] != run_id
+        ):
+            raise StoreError(
+                "stale_amendment",
+                "Draft an email only from the current saved analysis after refreshing.",
+                409,
+            )
+        if self._completion(db, run_id):
+            raise StoreError(
+                "completed_run_read_only",
+                "This check is complete and does not need an amendment request.",
+                409,
+            )
+        reviewed, _ = apply_review_overlay(run["result"], self._review_actions(db, run_id))
+        if reviewed.get("classification", {}).get("category") != "BL_COMPARISON":
+            raise StoreError(
+                "amendment_not_available",
+                "Amendment emails are available only for SI and draft-BL comparisons.",
+                409,
+            )
+        items = build_issue_items(reviewed)
+        if not items:
+            raise StoreError(
+                "no_actionable_items",
+                "This comparison has no unresolved item to include in an amendment email.",
+                409,
+            )
+        return task, run, items, facts_hash(items)
+
+    def generate_amendment_draft(self, task_id, expected_revision, run_id, method):
+        from app.documents.amendment import standard_wording
+        from app.store import StoreError, encode, now
+
+        if method not in {"gemini", "standard"}:
+            raise StoreError("invalid_amendment", "Choose Gemini or standard wording.", 422)
+        with self.connect() as db:
+            task, _, items, item_hash = self._amendment_context(
+                db, task_id, expected_revision, run_id
+            )
+            subject = task["subject"]
+            recipient = task["sender"]
+
+        provider_call = None
+        if method == "gemini":
+            if self.amendment_provider is None:
+                raise StoreError(
+                    "AI_NOT_CONFIGURED",
+                    "Gemini amendment email wording is not configured.",
+                    503,
+                )
+            generated = self.amendment_provider.draft_wording(
+                subject,
+                [item["kind"] for item in items],
+            )
+            wording = generated.response.model_dump()
+            provider_call = {
+                "operation": "amendment_email",
+                "document_id": None,
+                **generated.metadata.model_dump(mode="json"),
+            }
+        else:
+            wording = standard_wording(subject)
+
+        timestamp = now()
+        draft_id = str(uuid4())
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            _, _, current_items, current_hash = self._amendment_context(
+                db, task_id, expected_revision, run_id
+            )
+            if current_hash != item_hash:
+                raise StoreError(
+                    "stale_amendment",
+                    "The reviewed findings changed while the draft was generated. Retry.",
+                    409,
+                )
+            db.execute(
+                "INSERT INTO amendment_drafts "
+                "(id,task_id,revision,run_id,recipient,subject,opening,closing,issue_items,"
+                "facts_hash,generation_method,provider_call,user_edited,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?) "
+                "ON CONFLICT(task_id) DO UPDATE SET id=excluded.id,revision=excluded.revision,"
+                "run_id=excluded.run_id,recipient=excluded.recipient,subject=excluded.subject,"
+                "opening=excluded.opening,closing=excluded.closing,issue_items=excluded.issue_items,"
+                "facts_hash=excluded.facts_hash,generation_method=excluded.generation_method,"
+                "provider_call=excluded.provider_call,user_edited=0,created_at=excluded.created_at,"
+                "updated_at=excluded.updated_at",
+                (
+                    draft_id,
+                    task_id,
+                    expected_revision,
+                    run_id,
+                    recipient,
+                    wording["subject"],
+                    wording["opening"],
+                    wording["closing"],
+                    encode(current_items),
+                    current_hash,
+                    method,
+                    encode(provider_call) if provider_call else None,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+        return self.task_detail(task_id)
+
+    def update_amendment_draft(
+        self,
+        task_id,
+        draft_id,
+        expected_revision,
+        run_id,
+        recipient,
+        subject,
+        opening,
+        closing,
+    ):
+        from app.store import StoreError, now
+
+        values = {
+            "recipient": recipient.strip(),
+            "subject": subject.strip(),
+            "opening": opening.strip(),
+            "closing": closing.strip(),
+        }
+        if any(not value for value in values.values()) or any(
+            character in values[key] for key in ("recipient", "subject") for character in "\r\n"
+        ):
+            raise StoreError(
+                "invalid_amendment", "Enter visible, single-line recipient and subject text.", 422
+            )
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            _, _, items, item_hash = self._amendment_context(db, task_id, expected_revision, run_id)
+            draft = db.execute(
+                "SELECT * FROM amendment_drafts WHERE id=? AND task_id=?",
+                (draft_id, task_id),
+            ).fetchone()
+            if (
+                not draft
+                or draft["revision"] != expected_revision
+                or draft["run_id"] != run_id
+                or draft["facts_hash"] != item_hash
+            ):
+                raise StoreError(
+                    "stale_amendment",
+                    "The saved draft no longer matches the current findings. Generate it again.",
+                    409,
+                )
+            db.execute(
+                "UPDATE amendment_drafts SET recipient=?,subject=?,opening=?,closing=?,"
+                "issue_items=?,user_edited=1,updated_at=? WHERE id=?",
+                (
+                    values["recipient"],
+                    values["subject"],
+                    values["opening"],
+                    values["closing"],
+                    json.dumps(items, ensure_ascii=False, sort_keys=True),
+                    now(),
+                    draft_id,
+                ),
+            )
+        return self.task_detail(task_id)
+
     def task_run_detail(self, task_id, run_id):
         from app.store import StoreError, encode
 
@@ -489,6 +673,7 @@ class TaskStoreMixin:
         return {
             **detail,
             **summary,
+            "amendment_draft": None,
             "current_si_id": run["current_si_id"],
             "current_bl_id": run["current_bl_id"],
             "is_historical": task["current_run_id"] != run_id

@@ -8,14 +8,50 @@ from threading import Event, Lock
 import pytest
 from fastapi.testclient import TestClient
 
+from app.ai.amendment import (
+    AmendmentWording,
+    AmendmentWordingResult,
+    GeminiAmendmentProvider,
+)
+from app.ai.common import AIProviderError
 from app.config import Settings
 from app.dev_extraction import service as extraction_service
+from app.extraction.models import ProviderMetadata
 from app.main import create_app
 from app.store import Store
 
 FIXTURES = Path(__file__).parent / "fixtures"
 PREFIX = "/api/v1/dev/tasks"
 NAMES = {"consignee", "notify_party"}
+
+
+class FakeAmendmentProvider:
+    def __init__(self):
+        self.calls = []
+        self.failure = None
+        self.on_call = None
+
+    def draft_wording(self, subject, issue_kinds, *, timeout_seconds=None):
+        self.calls.append((subject, issue_kinds, timeout_seconds))
+        if self.on_call:
+            self.on_call()
+        if self.failure:
+            raise self.failure
+        return AmendmentWordingResult(
+            response=AmendmentWording(
+                subject=f"Please revise: {subject}",
+                opening="Hello,\n\nPlease review the evidence-backed items below.",
+                closing="Thank you. We look forward to the revised documents.",
+            ),
+            metadata=ProviderMetadata(
+                configured_model="fake-model",
+                model_version="fake-v1",
+                response_id="amendment-response-1",
+                prompt_version="amendment-email-wording-v1",
+                duration_ms=5.5,
+                usage={"prompt_token_count": 8, "total_token_count": 16},
+            ),
+        )
 
 
 @pytest.fixture
@@ -349,6 +385,310 @@ def test_completion_is_exact_idempotent_persisted_and_locks_review(task_client):
     with TestClient(create_app(settings)) as reopened:
         restored = reopened.get(f"{PREFIX}/{task['id']}/runs/{run_id}").json()
         assert restored["current_run"]["completion"] == acknowledgment
+
+
+def test_amendment_draft_uses_locked_facts_and_persists_latest_edit(task_client):
+    client, settings, _ = task_client
+    task = analyze(client, clone(client))
+    provider = FakeAmendmentProvider()
+    with TestClient(create_app(settings, amendment_provider=provider)) as enabled:
+        response = enabled.post(
+            f"{PREFIX}/{task['id']}/amendment-draft",
+            json={
+                "expected_revision": task["revision"],
+                "run_id": task["current_run"]["id"],
+                "method": "gemini",
+            },
+        )
+        assert response.status_code == 200, response.text
+        saved = response.json()["amendment_draft"]
+        assert provider.calls == [("Check draft BL", ["mismatch", "mismatch"], None)]
+        assert saved["generation_method"] == "gemini"
+        assert saved["provider_call"]["operation"] == "amendment_email"
+        assert saved["provider_call"]["document_id"] is None
+        assert saved["provider_call"]["response_id"] == "amendment-response-1"
+        assert [item["field"] for item in saved["issue_items"]] == [
+            "consignee",
+            "notify_party",
+        ]
+        assert all(item["kind"] == "mismatch" for item in saved["issue_items"])
+
+        updated = enabled.put(
+            f"{PREFIX}/{task['id']}/amendment-draft/{saved['id']}",
+            json={
+                "expected_revision": task["revision"],
+                "run_id": task["current_run"]["id"],
+                "recipient": "carrier@example.test",
+                "subject": "Please revise the draft BL",
+                "opening": "Hello carrier,",
+                "closing": "Thank you.",
+            },
+        )
+        assert updated.status_code == 200, updated.text
+        edited = updated.json()["amendment_draft"]
+        assert edited["recipient"] == "carrier@example.test"
+        assert edited["subject"] == "Please revise the draft BL"
+        assert edited["user_edited"] is True
+        assert edited["issue_items"] == saved["issue_items"]
+
+    with TestClient(create_app(settings, amendment_provider=provider)) as reopened:
+        restored = reopened.get(f"{PREFIX}/{task['id']}").json()["amendment_draft"]
+        assert restored["id"] == saved["id"]
+        assert restored["closing"] == "Thank you."
+        historical = reopened.get(f"{PREFIX}/{task['id']}/runs/{task['current_run']['id']}").json()
+        assert historical["amendment_draft"] is None
+
+
+def test_standard_amendment_and_explicit_failure_do_not_masquerade_as_ai(task_client):
+    client, settings, _ = task_client
+    task = analyze(client, clone(client))
+    provider = FakeAmendmentProvider()
+    provider.failure = AIProviderError(
+        "AI_RATE_LIMITED", "Gemini quota is unavailable.", retryable=True, status=429
+    )
+    with TestClient(create_app(settings, amendment_provider=provider)) as enabled:
+        failed = enabled.post(
+            f"{PREFIX}/{task['id']}/amendment-draft",
+            json={
+                "expected_revision": task["revision"],
+                "run_id": task["current_run"]["id"],
+                "method": "gemini",
+            },
+        )
+        assert failed.status_code == 429
+        assert failed.json()["detail"] == {
+            "code": "AI_RATE_LIMITED",
+            "message": "Gemini quota is unavailable.",
+            "retryable": True,
+        }
+        assert enabled.get(f"{PREFIX}/{task['id']}").json()["amendment_draft"] is None
+
+        fallback = enabled.post(
+            f"{PREFIX}/{task['id']}/amendment-draft",
+            json={
+                "expected_revision": task["revision"],
+                "run_id": task["current_run"]["id"],
+                "method": "standard",
+            },
+        )
+        assert fallback.status_code == 200, fallback.text
+        draft = fallback.json()["amendment_draft"]
+        assert draft["generation_method"] == "standard"
+        assert draft["provider_call"] is None
+
+
+def test_amendment_rejects_samples_completed_clean_stale_and_changed_facts(task_client):
+    client, settings, _ = task_client
+    mismatch = analyze(client, clone(client))
+    payload = {
+        "expected_revision": mismatch["revision"],
+        "run_id": mismatch["current_run"]["id"],
+        "method": "standard",
+    }
+    sample = client.post(f"{PREFIX}/email_004/amendment-draft", json=payload)
+    assert sample.status_code == 409
+    assert sample.json()["detail"]["code"] == "sample_read_only"
+
+    changed = upload_version(client, mismatch, 2)
+    stale = client.post(f"{PREFIX}/{mismatch['id']}/amendment-draft", json=payload)
+    assert stale.status_code == 409
+
+    clean = analyze(client, upload_version(client, changed, 3))
+    no_action = client.post(
+        f"{PREFIX}/{clean['id']}/amendment-draft",
+        json={
+            "expected_revision": clean["revision"],
+            "run_id": clean["current_run"]["id"],
+            "method": "standard",
+        },
+    )
+    assert no_action.status_code == 409
+    assert no_action.json()["detail"]["code"] == "no_actionable_items"
+
+    completion = client.post(
+        f"{PREFIX}/{clean['id']}/complete",
+        json={
+            "expected_revision": clean["revision"],
+            "run_id": clean["current_run"]["id"],
+            "acknowledge_seven_field_scope": True,
+        },
+    )
+    assert completion.status_code == 200
+    completed = client.post(
+        f"{PREFIX}/{clean['id']}/amendment-draft",
+        json={
+            "expected_revision": clean["revision"],
+            "run_id": clean["current_run"]["id"],
+            "method": "standard",
+        },
+    )
+    assert completed.status_code == 409
+    assert completed.json()["detail"]["code"] == "completed_run_read_only"
+
+    race_task = analyze(client, clone(client))
+    provider = FakeAmendmentProvider()
+    provider.on_call = lambda: Store(settings.local_data_dir).replace_document(
+        race_task["id"],
+        race_task["revision"],
+        "bl",
+        "changed.txt",
+        (FIXTURES / "revisions/team_email_004_BL_v2.txt").read_bytes(),
+    )
+    with TestClient(create_app(settings, amendment_provider=provider)) as enabled:
+        raced = enabled.post(
+            f"{PREFIX}/{race_task['id']}/amendment-draft",
+            json={
+                "expected_revision": race_task["revision"],
+                "run_id": race_task["current_run"]["id"],
+                "method": "gemini",
+            },
+        )
+        assert raced.status_code == 409
+        assert raced.json()["detail"]["code"] in {"stale_revision", "stale_amendment"}
+        assert enabled.get(f"{PREFIX}/{race_task['id']}").json()["amendment_draft"] is None
+
+
+def test_missing_si_value_is_not_backfilled_from_bl_in_amendment_facts():
+    from app.documents.amendment import build_issue_items
+
+    extraction = {
+        "raw_value": None,
+        "normalized_value": None,
+        "value_state": "MISSING",
+        "requires_human_confirmation": False,
+    }
+    present = {
+        "raw_value": "235,550 KG",
+        "normalized_value": "235550",
+        "value_state": "PRESENT",
+        "requires_human_confirmation": False,
+    }
+    result = {
+        "fields": [
+            {
+                "key": "gross_weight_kg",
+                "si": extraction,
+                "bl": present,
+                "finding": "NEEDS_REVIEW",
+            }
+        ],
+        "review_requirements": [],
+    }
+    item = build_issue_items(result)[0]
+    assert item["kind"] == "missing_value"
+    assert item["si_value"] == "Missing"
+    assert item["bl_value"] == "235,550 KG"
+    assert "corrected SI" in item["requested_action"]
+
+
+def test_amendment_facts_cover_review_states_and_deduplicate_requirements():
+    from app.documents.amendment import build_issue_items
+
+    def present(value="VALUE"):
+        return {
+            "raw_value": value,
+            "normalized_value": value,
+            "value_state": "PRESENT",
+            "requires_human_confirmation": False,
+        }
+
+    fields = [
+        {"key": key, "si": present(), "bl": present(), "finding": "MATCH"}
+        for key in (
+            "shipper",
+            "consignee",
+            "notify_party",
+            "port_of_loading",
+            "port_of_discharge",
+            "container_count",
+            "gross_weight_kg",
+        )
+    ]
+    fields[0]["si"].update(value_state="AMBIGUOUS", raw_value=None)
+    fields[0]["finding"] = "NEEDS_REVIEW"
+    fields[1]["bl"].update(value_state="UNREADABLE", raw_value=None)
+    fields[1]["finding"] = "NEEDS_REVIEW"
+    fields[2]["si"].update(requires_human_confirmation=True)
+    fields[2]["finding"] = "NEEDS_REVIEW"
+    fields[3]["bl"].update(
+        value_state="MISSING",
+        raw_value=None,
+        supplied_information={"raw_value": "PORT KLANG"},
+    )
+    # A stale/malformed mismatch flag cannot promote supplied information to a fact.
+    fields[3]["finding"] = "MISMATCH"
+    result = {
+        "fields": fields,
+        "review_requirements": [
+            {"code": "AMBIGUOUS_TEXT_VALUE", "field": "shipper", "message": "Duplicate"},
+            {
+                "code": "wrong_doc_type",
+                "document_id": "doc-1",
+                "message": "The selected source is not an SI or draft BL.",
+                "next_action": "Replace the document.",
+            },
+            {
+                "code": "wrong_doc_type",
+                "document_id": "doc-1",
+                "message": "The selected source is not an SI or draft BL.",
+                "next_action": "Replace the document.",
+            },
+            {"code": "unresolved_fields", "message": "Some fields need review."},
+        ],
+    }
+    items = build_issue_items(result)
+
+    assert [item["kind"] for item in items] == [
+        "ambiguous",
+        "unreadable",
+        "pending_review",
+        "supplied_information",
+        "document_requirement",
+    ]
+    assert len({item["id"] for item in items}) == len(items)
+    pending = next(item for item in items if item["kind"] == "pending_review")
+    assert pending["si_value"] is None and pending["bl_value"] is None
+
+
+def test_gemini_amendment_prompt_contains_only_bounded_wording_context():
+    captured = {}
+
+    class Models:
+        def generate_content(self, **kwargs):
+            captured.update(kwargs)
+            return type(
+                "Response",
+                (),
+                {
+                    "text": AmendmentWording(
+                        subject="Please revise the draft BL",
+                        opening="Hello, please review the items below.",
+                        closing="Thank you.",
+                    ).model_dump_json(),
+                    "model_version": "model-v1",
+                    "response_id": "response-id",
+                    "usage_metadata": {"prompt_token_count": 3, "total_token_count": 7},
+                },
+            )()
+
+    class Client:
+        models = Models()
+
+        def close(self):
+            pass
+
+    provider = GeminiAmendmentProvider(
+        Settings(gemini_api_key="secret", gemini_model="configured-model", _env_file=None),
+        client_factory=lambda **_: Client(),
+    )
+    result = provider.draft_wording("Check draft BL", ["mismatch", "missing_value"])
+    prompt = captured["contents"]
+
+    assert "Check draft BL" in prompt
+    assert "mismatch, missing_value" in prompt
+    assert "235,550 KG" not in prompt
+    assert "source excerpt" not in prompt.casefold()
+    assert result.metadata.prompt_version == "amendment-email-wording-v1"
 
 
 def test_stale_upload_analysis_and_pair_selection_do_not_mutate_revision(task_client):

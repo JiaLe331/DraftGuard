@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.datastructures import UploadFile
 
+from app.ai.common import AIProviderError
 from app.dev_extraction.uploads import LimitedUploadParser
 from app.store import StoreError
 
@@ -97,12 +98,49 @@ class CompleteTask(AnalyzeTask):
     acknowledge_seven_field_scope: Literal[True]
 
 
+class GenerateAmendment(AnalyzeTask):
+    run_id: str = Field(min_length=1)
+    method: Literal["gemini", "standard"]
+
+
+class UpdateAmendment(AnalyzeTask):
+    run_id: str = Field(min_length=1)
+    recipient: str = Field(min_length=1, max_length=320)
+    subject: str = Field(min_length=1, max_length=500)
+    opening: str = Field(min_length=1, max_length=2000)
+    closing: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("recipient", "subject", "opening", "closing")
+    @classmethod
+    def reject_blank_text(cls, value: str):
+        value = value.strip()
+        if not value:
+            raise ValueError("Enter visible text")
+        return value
+
+    @field_validator("recipient", "subject")
+    @classmethod
+    def require_single_line(cls, value: str):
+        if any(character in value for character in "\r\n"):
+            raise ValueError("Use one line")
+        return value
+
+
 def build_task_router(settings, store):
     router = APIRouter(prefix="/api/v1/dev/tasks", tags=["local tasks"])
 
     def execute(operation):
         try:
             return operation()
+        except AIProviderError as exc:
+            raise HTTPException(
+                exc.status,
+                detail={
+                    "code": exc.code,
+                    "message": exc.message,
+                    "retryable": exc.retryable,
+                },
+            ) from exc
         except StoreError as exc:
             detail = {
                 "code": exc.code,
@@ -245,6 +283,34 @@ def build_task_router(settings, store):
                 payload.expected_revision,
                 payload.run_id,
                 payload.acknowledge_seven_field_scope,
+            )
+        )
+
+    @router.post("/{task_id}/amendment-draft")
+    def generate_amendment(task_id: str, payload: GenerateAmendment, request: Request):
+        guard(request)
+        return execute(
+            lambda: store.generate_amendment_draft(
+                task_id,
+                payload.expected_revision,
+                payload.run_id,
+                payload.method,
+            )
+        )
+
+    @router.put("/{task_id}/amendment-draft/{draft_id}")
+    def update_amendment(task_id: str, draft_id: str, payload: UpdateAmendment, request: Request):
+        guard(request)
+        return execute(
+            lambda: store.update_amendment_draft(
+                task_id,
+                draft_id,
+                payload.expected_revision,
+                payload.run_id,
+                payload.recipient,
+                payload.subject,
+                payload.opening,
+                payload.closing,
             )
         )
 

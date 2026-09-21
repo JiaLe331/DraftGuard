@@ -8,6 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.exceptions import HTTPException
 
+from app.ai.amendment import GeminiAmendmentProvider
 from app.api.health import router as health_router
 from app.api.samples import build_router
 from app.api.tasks import build_task_router
@@ -21,7 +22,10 @@ from app.store import Store
 
 
 def create_app(
-    settings: Settings | None = None, vision_provider=None, semantic_provider=None
+    settings: Settings | None = None,
+    vision_provider=None,
+    semantic_provider=None,
+    amendment_provider=None,
 ) -> FastAPI:
     settings = settings if settings is not None else Settings()
 
@@ -43,7 +47,7 @@ def create_app(
     application.add_middleware(
         CORSMiddleware,
         allow_origins=settings.allowed_origins,
-        allow_methods=["GET", "POST"] if settings.app_env == "development" else ["GET"],
+        allow_methods=["GET", "POST", "PUT"] if settings.app_env == "development" else ["GET"],
         allow_headers=["Content-Type"],
         expose_headers=["X-Request-ID"],
     )
@@ -55,7 +59,9 @@ def create_app(
             store, settings, vision_provider, semantic_provider
         )
         application.state.mailbox_store = Store(
-            settings.local_data_dir, application.state.run_service
+            settings.local_data_dir,
+            application.state.run_service,
+            amendment_provider or GeminiAmendmentProvider(settings),
         )
         application.include_router(build_router(settings, application.state.mailbox_store))
         application.include_router(build_task_router(settings, application.state.mailbox_store))

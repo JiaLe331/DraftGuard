@@ -20,7 +20,7 @@ from app.dev_extraction.store import AuditStore
 from app.store import Store
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, vision_provider=None) -> FastAPI:
     settings = settings if settings is not None else Settings()
 
     @asynccontextmanager
@@ -49,7 +49,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if settings.app_env == "development":
         store = AuditStore(settings.dev_audit_db)
         application.state.audit_store = store
-        application.state.run_service = RunService(store, settings)
+        application.state.run_service = RunService(store, settings, vision_provider)
         application.state.mailbox_store = Store(
             settings.local_data_dir, application.state.run_service
         )

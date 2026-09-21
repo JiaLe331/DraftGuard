@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     supabase_storage_bucket: str | None = None
     gemini_api_key: SecretStr | None = None
     gemini_model: str | None = None
+    gemini_timeout_seconds: float = Field(default=30, gt=0, le=55)
     demo_session_secret: SecretStr | None = None
 
     @property

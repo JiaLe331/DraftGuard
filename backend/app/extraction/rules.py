@@ -30,6 +30,15 @@ ALIASES: dict[FieldKey, set[str]] = {
     },
     "gross_weight_kg": {"GROSS WEIGHT", "GROSS WT", "TOTAL GROSS WEIGHT", "TOTAL GROSS WT"},
 }
+PRIMARY_LABELS: dict[FieldKey, str] = {
+    "shipper": "SHIPPER",
+    "consignee": "CONSIGNEE",
+    "notify_party": "NOTIFY PARTY",
+    "port_of_loading": "PORT OF LOADING",
+    "port_of_discharge": "PORT OF DISCHARGE",
+    "container_count": "CONTAINER COUNT",
+    "gross_weight_kg": "GROSS WEIGHT",
+}
 UNIT_PATTERN = re.compile(
     r"(?<![A-Za-z])(?:KILOGRAMS?|KGS?|GRAMS?|G|METRIC\s+TON(?:NE)?S?|TONNES?|MTS?|T)(?![A-Za-z])",
     re.I,
@@ -316,6 +325,11 @@ def normalize(item: Candidate) -> tuple[str | None, str | None, str, str | None]
     if key in {"port_of_loading", "port_of_discharge"} and len(raw.splitlines()) > 1:
         return raw, None, "AMBIGUOUS", "AMBIGUOUS_TEXT_VALUE"
     return raw, " ".join(normalized_text.upper().split()), "PRESENT", None
+
+
+def normalize_review_value(key: FieldKey, raw: str):
+    """Apply the same conservative normalization to a visual or human value."""
+    return normalize(Candidate(key=key, label=PRIMARY_LABELS[key], raw=raw, units=[]))
 
 
 ISSUE_DETAILS = {

@@ -157,8 +157,11 @@ def test_provided_dataset_acceptance(tmp_path):
     assert listing["total"] == 520 and len(listing["items"]) == 50
     assert listing["summary"]["attachments"] == 250
     results = {}
-    for email_id in ("email_004", "email_160", "email_055", "email_501", "email_512", "email_516"):
+    for email_id in ("email_004", "email_160", "email_055", "email_501", "email_516"):
         results[email_id] = store.analyze(email_id, 1)["current_run"]["result"]
+    scan = store.analyze("email_512", 1)
+    assert scan["current_run"] is None
+    assert scan["latest_run"]["error"]["code"] == "AI_NOT_CONFIGURED"
     assert results["email_004"]["known_defect_fields"] == ["consignee", "notify_party"]
     si = results["email_160"]["fields"]
     assert {f["key"] for f in si} == set(FIELDS)
@@ -173,9 +176,6 @@ def test_provided_dataset_acceptance(tmp_path):
     assert spreadsheet[-1]["bl"]["normalized_value"] == "243588"
     assert any(
         r["code"] == "WRONG_DOCUMENT_TYPE" for r in results["email_501"]["review_requirements"]
-    )
-    assert any(
-        r["code"] == "VISUAL_REVIEW_REQUIRED" for r in results["email_512"]["review_requirements"]
     )
     weight = results["email_516"]["fields"][-1]
     assert weight["si"]["normalized_value"] is None and weight["bl"]["normalized_value"] == "235550"

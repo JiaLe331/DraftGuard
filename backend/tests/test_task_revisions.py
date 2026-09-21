@@ -233,7 +233,7 @@ def test_missing_pair_stays_unresolved_instead_of_resolving_prior_findings(task_
         (
             (FIXTURES / "extraction/email_512_SI.pdf").read_bytes(),
             "scan.pdf",
-            "VISUAL_REVIEW_REQUIRED",
+            "AI_NOT_CONFIGURED",
         ),
     ],
     ids=["wrong-document-type", "image-only-pdf"],
@@ -247,6 +247,10 @@ def test_wrong_or_unreadable_replacement_never_resolves_findings(
     assert response.status_code in (200, 201), response.text
     checked = analyze(client, response.json())
     assert checked["workflow_state"] != "READY"
+    if expected_code == "AI_NOT_CONFIGURED":
+        assert checked["current_run"] is None
+        assert checked["latest_run"]["error"]["code"] == expected_code
+        return
     assert expected_code in {r["code"] for r in result(checked)["review_requirements"]}
     assert result(checked)["revision_delta"]["resolved"] == []
     assert NAMES <= set(result(checked)["revision_delta"]["uncertain"])

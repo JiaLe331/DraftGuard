@@ -1,6 +1,7 @@
 """Development-only local working copies; no session ownership or public access claim."""
 
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
@@ -25,6 +26,28 @@ class AnalyzeTask(BaseModel):
 class SelectPair(AnalyzeTask):
     si_id: str | None
     bl_id: str | None
+
+
+class ReviewEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    page: int = Field(ge=1)
+
+
+class ReviewTask(AnalyzeTask):
+    run_id: str = Field(min_length=1)
+    document_id: str = Field(min_length=1)
+    field: Literal[
+        "shipper",
+        "consignee",
+        "notify_party",
+        "port_of_loading",
+        "port_of_discharge",
+        "container_count",
+        "gross_weight_kg",
+    ]
+    action: Literal["CONFIRM_CANDIDATE", "CORRECT_EXTRACTION"]
+    raw_value: str | None = Field(default=None, max_length=5000)
+    evidence: ReviewEvidence
 
 
 def build_task_router(settings, store):
@@ -136,6 +159,22 @@ def build_task_router(settings, store):
             )
         )
         return JSONResponse(result, status_code=200 if wait else 202)
+
+    @router.post("/{task_id}/reviews")
+    def review(task_id: str, payload: ReviewTask, request: Request):
+        guard(request)
+        return execute(
+            lambda: store.record_review(
+                task_id,
+                payload.expected_revision,
+                payload.run_id,
+                payload.document_id,
+                payload.field,
+                payload.action,
+                payload.raw_value,
+                payload.evidence.page,
+            )
+        )
 
     @router.get("/{task_id}/runs/{run_id}")
     def history(task_id: str, run_id: str):

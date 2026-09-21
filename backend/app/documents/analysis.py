@@ -91,7 +91,9 @@ def adapt_document(document: dict) -> dict:
         evidence = []
         for ref in field["evidence"]:
             unit = by_id[ref["unit_id"]]
-            if ref["document_id"] != document["document_id"] or ref["excerpt"] not in unit["text"]:
+            if ref["document_id"] != document["document_id"] or (
+                ref.get("verified", True) and ref["excerpt"] not in unit["text"]
+            ):
                 raise ValueError("Shared extraction returned invalid source evidence")
             evidence.append({**unit, **ref})
         values[field["field"]] = {
@@ -104,14 +106,28 @@ def adapt_document(document: dict) -> dict:
     if not role and any(i["code"] == "WRONG_DOCUMENT_TYPE" for i in issues):
         role = "other"
     error = document.get("error")
-    if not error and extracted and extracted["parsing_status"] != "READABLE":
+    if (
+        not error
+        and extracted
+        and (
+            extracted["parsing_status"] in {"FAILED", "REJECTED"}
+            or (
+                extracted["parsing_status"] == "NO_USABLE_TEXT"
+                and not extracted.get("provider_metadata")
+            )
+        )
+    ):
         error = next(iter(issues), None)
     return {
         "id": document["document_id"],
         "role": role.lower() if role else None,
-        "state": "PARSED"
-        if extracted and extracted["parsing_status"] == "READABLE"
-        else "UNREADABLE",
+        "state": (
+            "PARSED"
+            if extracted and extracted["parsing_status"] == "READABLE"
+            else "VISUAL_CANDIDATES"
+            if extracted and extracted.get("provider_metadata")
+            else "UNREADABLE"
+        ),
         "units": units,
         "error": error,
         "values": values,
@@ -129,6 +145,7 @@ def compare(classification: dict, documents: list[dict], emit=None, selected_pai
         "coverage": {"checked": 0, "total": 7},
         "workflow_state": "NOT_APPLICABLE",
         "processing_status": "SUCCEEDED",
+        "provider_calls": [],
     }
     requirements = result["review_requirements"]
     if classification["category"] is None:
@@ -141,6 +158,13 @@ def compare(classification: dict, documents: list[dict], emit=None, selected_pai
     for document in documents:
         adapted = adapt_document(document)
         result["documents"].append(adapted)
+        if adapted["extraction"] and adapted["extraction"].get("provider_metadata"):
+            result["provider_calls"].append(
+                {
+                    "document_id": adapted["id"],
+                    **adapted["extraction"]["provider_metadata"],
+                }
+            )
         if adapted["error"]:
             requirements.append({**adapted["error"], "document_id": adapted["id"]})
         for issue in (adapted["extraction"] or {}).get("issues", []):

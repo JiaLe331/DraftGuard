@@ -6,6 +6,7 @@ import re
 import sqlite3
 import threading
 from contextlib import contextmanager
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -15,6 +16,7 @@ from app.dev_extraction.dataset import DatasetError
 from app.dev_extraction.service import DocumentInput, RunService
 from app.dev_extraction.store import AuditStore
 from app.documents.analysis import PIPELINE_VERSION
+from app.documents.reviews import apply_review_overlay
 from app.documents.workflow import MailboxWorkflow
 from app.extraction.models import ExtractionLimits
 from app.task_store import TaskStoreMixin
@@ -69,6 +71,22 @@ class Store(TaskStoreMixin):
                     result TEXT, error TEXT
                 );
                 CREATE INDEX IF NOT EXISTS runs_by_email ON runs(email_id, started_at);
+                CREATE TABLE IF NOT EXISTS review_events (
+                    id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES emails(id),
+                    revision INTEGER NOT NULL, run_id TEXT NOT NULL REFERENCES runs(id),
+                    document_id TEXT NOT NULL REFERENCES documents(id), field TEXT NOT NULL,
+                    action TEXT NOT NULL, machine_raw_value TEXT, raw_value TEXT,
+                    normalized_value TEXT, page INTEGER NOT NULL, unit_id TEXT NOT NULL,
+                    actor TEXT NOT NULL, created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS reviews_by_run
+                    ON review_events(run_id, created_at);
+                CREATE TRIGGER IF NOT EXISTS immutable_review_update
+                    BEFORE UPDATE ON review_events
+                    BEGIN SELECT RAISE(ABORT, 'Review events are append-only'); END;
+                CREATE TRIGGER IF NOT EXISTS immutable_review_delete
+                    BEFORE DELETE ON review_events
+                    BEGIN SELECT RAISE(ABORT, 'Review events are append-only'); END;
             """)
             if "audit_run_id" not in {row[1] for row in db.execute("PRAGMA table_info(runs)")}:
                 db.execute("ALTER TABLE runs ADD COLUMN audit_run_id TEXT")
@@ -287,6 +305,37 @@ class Store(TaskStoreMixin):
             run[key] = json.loads(run[key]) if run[key] is not None else None
         return run
 
+    def _review_actions(self, db, run_id):
+        if not run_id:
+            return []
+        return [
+            dict(row)
+            for row in db.execute(
+                "SELECT * FROM review_events WHERE run_id=? ORDER BY created_at,rowid", (run_id,)
+            )
+        ]
+
+    def _public_run(self, db, run):
+        if not run:
+            return None
+        public = deepcopy(run)
+        actions = self._review_actions(db, run["id"])
+        public["review_actions"] = actions
+        if run.get("result"):
+            reviewed, progress = apply_review_overlay(run["result"], actions)
+            public["reviewed_result"] = reviewed
+            public["review_progress"] = progress
+        else:
+            public["reviewed_result"] = None
+            public["review_progress"] = {
+                "total": 0,
+                "reviewed": 0,
+                "confirmed": 0,
+                "corrected": 0,
+                "pending": 0,
+            }
+        return public
+
     def _email(self, db, email_id):
         row = db.execute("SELECT * FROM emails WHERE id=?", (email_id,)).fetchone()
         if row is None:
@@ -442,7 +491,8 @@ class Store(TaskStoreMixin):
     def _summary(self, db, email):
         current = self._run(db, email["current_run_id"])
         latest = self._run(db, email["latest_run_id"])
-        result = current["result"] if current else None
+        public_current = self._public_run(db, current)
+        result = public_current["reviewed_result"] if public_current else None
         state = result["workflow_state"] if result else "NOT_ANALYZED"
         if latest and latest["status"] in {"FAILED", "RUNNING"}:
             state = latest["status"]
@@ -534,8 +584,8 @@ class Store(TaskStoreMixin):
                 "is_historical": False,
                 "body": email["body"],
                 "documents": public_docs,
-                "current_run": self._run(db, email["current_run_id"]),
-                "latest_run": self._run(db, email["latest_run_id"]),
+                "current_run": self._public_run(db, self._run(db, email["current_run_id"])),
+                "latest_run": self._public_run(db, self._run(db, email["latest_run_id"])),
                 "runs": [dict(row) for row in runs],
             }
 

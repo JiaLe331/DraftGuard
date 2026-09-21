@@ -11,8 +11,9 @@ from pathlib import PureWindowsPath
 from time import perf_counter
 from uuid import uuid4
 
+from app.ai import GeminiVisionProvider, VisionProviderError, apply_visual_candidates
 from app.config import Settings
-from app.extraction.models import SourceUnit
+from app.extraction.models import DocumentExtraction, SourceUnit
 
 from .dataset import DatasetError
 from .process import run_worker
@@ -31,8 +32,9 @@ class DocumentInput:
 
 
 class RunService:
-    def __init__(self, store: AuditStore, settings: Settings):
+    def __init__(self, store: AuditStore, settings: Settings, vision_provider=None):
         self.store, self.settings = store, settings
+        self.vision_provider = vision_provider or GeminiVisionProvider(settings)
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="extraction")
         self.capacity = threading.BoundedSemaphore(2)
         self.stopping = threading.Event()
@@ -221,6 +223,58 @@ class RunService:
             document["last_completed_stage"] = item["stage"]
         self.store.save(run, [item])
 
+    def _visual_extract(self, run, document, source, content, result, start, remaining):
+        if result["detected_format"] != "pdf" or result["parsing_status"] != "NO_USABLE_TEXT":
+            return result
+        began = perf_counter()
+        self._record(
+            run,
+            document,
+            "vision_provider",
+            "STARTED",
+            "Sending one scanned PDF for visual extraction.",
+            start,
+            provider="gemini",
+            configured_model=getattr(self.vision_provider, "model", None),
+        )
+        try:
+            visual = self.vision_provider.extract_pdf(
+                content,
+                source.expected_role,
+                timeout_seconds=min(self.settings.gemini_timeout_seconds, remaining),
+            )
+            adapted = apply_visual_candidates(
+                DocumentExtraction.model_validate(result), visual, source.expected_role
+            )
+        except VisionProviderError as exc:
+            self._record(
+                run,
+                document,
+                "vision_provider",
+                "FAILED",
+                exc.message,
+                start,
+                code=exc.code,
+                retryable=exc.retryable,
+                duration_ms=round((perf_counter() - began) * 1000, 3),
+            )
+            raise
+        metadata = visual.metadata.model_dump(mode="json")
+        self._record(
+            run,
+            document,
+            "vision_provider",
+            "NEEDS_REVIEW",
+            "Visual candidates returned for human confirmation.",
+            start,
+            **metadata,
+            candidates=[
+                {"field": item.field, "page": item.page, "has_value": item.raw_value is not None}
+                for item in visual.response.fields
+            ],
+        )
+        return adapted.model_dump(mode="json")
+
     def _execute(self, run, inputs, start, workflow=None):
         def emit(stage, status, message, **details):
             self._record(run, None, stage, status, message, start, **details)
@@ -266,18 +320,36 @@ class RunService:
                         lambda item: self._observe(run, document, item),
                         self.stopping,
                     )
+                    if (
+                        result is not None
+                        and error is None
+                        and result["detected_format"] == "pdf"
+                        and result["parsing_status"] == "NO_USABLE_TEXT"
+                    ):
+                        remaining = self.settings.dev_run_timeout - (perf_counter() - start)
+                        if remaining <= 0:
+                            raise VisionProviderError(
+                                "AI_TIMEOUT",
+                                "The run time limit was reached before visual extraction.",
+                                retryable=True,
+                                status=504,
+                            )
+                        result = self._visual_extract(
+                            run, document, source, content, result, start, remaining
+                        )
                     document.update(result=result, error=error)
                     document["processing_status"] = (
                         "FAILED"
                         if error or result["parsing_status"] in {"FAILED", "REJECTED"}
                         else "SUCCEEDED"
                     )
-                except (DatasetError, OSError) as exc:
+                except (DatasetError, VisionProviderError, OSError) as exc:
                     document.update(
                         processing_status="FAILED",
                         error={
                             "code": getattr(exc, "code", "ATTACHMENT_UNAVAILABLE"),
                             "message": getattr(exc, "message", "The attachment could not be read."),
+                            "retryable": getattr(exc, "retryable", False),
                         },
                     )
                 document["elapsed_ms"] = round((perf_counter() - began) * 1000, 3)

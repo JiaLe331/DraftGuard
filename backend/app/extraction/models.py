@@ -67,6 +67,20 @@ class Evidence(Locator):
     document_id: str
     excerpt: str
     verified: bool = True
+    verification_source: Literal["source_text", "ai_visual_candidate", "human_visual"] = (
+        "source_text"
+    )
+
+
+class ProviderMetadata(Contract):
+    provider: Literal["gemini"] = "gemini"
+    configured_model: str
+    model_version: str | None = None
+    response_id: str | None = None
+    prompt_version: str
+    duration_ms: float = Field(ge=0)
+    usage: dict[str, int | None] | None = None
+    cost_usd: float | None = None
 
 
 class FieldExtraction(Contract):
@@ -100,3 +114,4 @@ class DocumentExtraction(Contract):
     issues: list[ExtractionIssue] = Field(default_factory=list)
     needs_review: bool
     pipeline_version: str = "rules-1"
+    provider_metadata: ProviderMetadata | None = None

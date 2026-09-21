@@ -72,7 +72,10 @@ def run_worker(content, document, timeout, max_file_bytes, observer=None, stoppi
         except (OSError, ValueError):
             pass
         finally:
-            process.stdin.close()
+            try:
+                process.stdin.close()
+            except (OSError, ValueError):
+                pass
 
     reader = threading.Thread(target=read, daemon=True)
     writer = threading.Thread(target=write, daemon=True)

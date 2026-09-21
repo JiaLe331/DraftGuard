@@ -5,8 +5,9 @@ import json
 from pathlib import Path, PureWindowsPath
 from uuid import uuid4
 
-from app.extraction.models import ExtractionLimits
+from app.extraction.models import FIELD_KEYS, ExtractionLimits
 from app.extraction.parsers import ParseProblem, detect_format
+from app.extraction.rules import normalize_review_value
 
 
 class TaskStoreMixin:
@@ -217,6 +218,113 @@ class TaskStoreMixin:
                 return row["id"]
         return None
 
+    def record_review(
+        self,
+        task_id,
+        expected_revision,
+        run_id,
+        document_id,
+        field,
+        action,
+        raw_value,
+        page,
+    ):
+        from app.store import StoreError, now
+
+        if field not in FIELD_KEYS:
+            raise StoreError("invalid_review", "Choose one supported comparison field.", 422)
+        if action not in {"CONFIRM_CANDIDATE", "CORRECT_EXTRACTION"}:
+            raise StoreError(
+                "invalid_review", "Choose confirm candidate or correct extraction.", 422
+            )
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            task = self._task(db, task_id, expected_revision)
+            run = self._run(db, run_id)
+            if (
+                not run
+                or run["email_id"] != task_id
+                or run["status"] != "SUCCEEDED"
+                or run["revision"] != task["revision"]
+                or task["current_run_id"] != run_id
+            ):
+                raise StoreError(
+                    "stale_review", "Review the current saved analysis after refreshing.", 409
+                )
+            if document_id not in run["document_ids"] or document_id not in {
+                task["current_si_id"],
+                task["current_bl_id"],
+            }:
+                raise StoreError(
+                    "stale_review", "This document is not part of the current comparison.", 409
+                )
+            result = run["result"]
+            document = next(
+                (item for item in result["documents"] if item["id"] == document_id), None
+            )
+            if not document or document.get("role") not in {"si", "bl"}:
+                raise StoreError("invalid_review", "The source role is not established.", 422)
+            machine_field = next((item for item in result["fields"] if item["key"] == field), None)
+            machine = machine_field[document["role"]] if machine_field else None
+            if not machine or machine.get("method") != "gemini_vision":
+                raise StoreError(
+                    "invalid_review", "Only Gemini visual candidates can be reviewed here.", 422
+                )
+            unit = next(
+                (item for item in document.get("units", []) if item.get("page") == page), None
+            )
+            if unit is None:
+                raise StoreError(
+                    "invalid_review", "Choose a page that exists in the current PDF.", 422
+                )
+            if action == "CONFIRM_CANDIDATE":
+                evidence_pages = {item.get("page") for item in machine.get("evidence", [])}
+                if machine.get("raw_value") is None or page not in evidence_pages:
+                    raise StoreError(
+                        "invalid_review",
+                        (
+                            "This candidate cannot be confirmed; correct it against the source "
+                            "instead."
+                        ),
+                        422,
+                    )
+                saved_raw = machine["raw_value"]
+                normalized = machine.get("normalized_value")
+            else:
+                saved_raw = raw_value.strip() if isinstance(raw_value, str) else ""
+                if not saved_raw or len(saved_raw) > 5000:
+                    raise StoreError(
+                        "invalid_review", "Enter the value visible on the selected PDF page.", 422
+                    )
+                saved_raw, normalized, state, _ = normalize_review_value(field, saved_raw)
+                if state != "PRESENT" or normalized is None:
+                    raise StoreError(
+                        "invalid_review",
+                        "The correction is still ambiguous. Include an explicit, supported value.",
+                        422,
+                    )
+            review_id = str(uuid4())
+            db.execute(
+                "INSERT INTO review_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    review_id,
+                    task_id,
+                    task["revision"],
+                    run_id,
+                    document_id,
+                    field,
+                    action,
+                    machine.get("raw_value"),
+                    saved_raw,
+                    normalized,
+                    page,
+                    unit["id"],
+                    "Demo reviewer — unverified",
+                    now(),
+                ),
+            )
+        return self.task_detail(task_id)
+
     def task_run_detail(self, task_id, run_id):
         from app.store import StoreError, encode
 
@@ -234,6 +342,7 @@ class TaskStoreMixin:
             }
             docs = self._documents(db, snapshot)
             summary = self._summary(db, snapshot)
+            public_run = self._public_run(db, run)
         detail = self.task_detail(task_id)
         return {
             **detail,
@@ -249,6 +358,6 @@ class TaskStoreMixin:
                 }
                 for doc in docs
             ],
-            "current_run": run if run["status"] == "SUCCEEDED" else None,
-            "latest_run": run,
+            "current_run": public_run if run["status"] == "SUCCEEDED" else None,
+            "latest_run": public_run,
         }

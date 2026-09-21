@@ -1,0 +1,15 @@
+# Cloud Build uploads this directory. Without this file gcloud derives its
+# exclusions from .gitignore, which is not what the image needs.
+.venv/
+.local/
+.ruff_cache/
+.pytest_cache/
+__pycache__/
+**/__pycache__/
+*.pyc
+.env
+.env.*
+tests/
+
+# demo-store/ is deliberately NOT excluded: the Dockerfile bakes it into the
+# image so every visitor starts from the same known-good state.

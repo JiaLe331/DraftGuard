@@ -35,12 +35,12 @@ def create_app(
     async def lifespan(application):
         if settings.dev_extraction_enabled:
             application.state.audit_store.initialize()
-        if settings.app_env == "development":
+        if settings.full_app_enabled:
             application.state.mailbox_store.recover_audit_runs()
         try:
             yield
         finally:
-            if settings.app_env == "development":
+            if settings.full_app_enabled:
                 await run_in_threadpool(application.state.run_service.shutdown)
 
     application = FastAPI(title="DraftGuard API", version="0.1.0", lifespan=lifespan)
@@ -49,12 +49,12 @@ def create_app(
     application.add_middleware(
         CORSMiddleware,
         allow_origins=settings.allowed_origins,
-        allow_methods=["GET", "POST", "PUT"] if settings.app_env == "development" else ["GET"],
+        allow_methods=["GET", "POST", "PUT"] if settings.full_app_enabled else ["GET"],
         allow_headers=["Content-Type"],
         expose_headers=["X-Request-ID"],
     )
     application.include_router(health_router)
-    if settings.app_env == "development":
+    if settings.full_app_enabled:
         store = AuditStore(settings.dev_audit_db)
         application.state.audit_store = store
         application.state.run_service = RunService(

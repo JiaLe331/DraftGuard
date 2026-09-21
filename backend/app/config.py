@@ -1,7 +1,14 @@
+import json
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import Field, SecretStr, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+# Environments that serve the whole product rather than health alone. "demo" is
+# the deployed judge-facing build: same surface as local development, without
+# claiming to be a hardened production deployment.
+FULL_APP_ENVS = frozenset({"development", "demo"})
 
 
 class Settings(BaseSettings):
@@ -21,7 +28,10 @@ class Settings(BaseSettings):
     dev_request_limit: int = Field(default=4 * 1024 * 1024, gt=0)
     dev_document_timeout: float = Field(default=15, gt=0)
     dev_run_timeout: float = Field(default=60, gt=0)
-    allowed_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    allowed_origins: Annotated[list[str], NoDecode] = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
     supabase_url: str | None = None
     supabase_secret_key: SecretStr | None = None
     supabase_storage_bucket: str | None = None
@@ -32,8 +42,27 @@ class Settings(BaseSettings):
     demo_session_secret: SecretStr | None = None
 
     @property
+    def full_app_enabled(self) -> bool:
+        return self.app_env in FULL_APP_ENVS
+
+    @property
     def dev_extraction_enabled(self) -> bool:
-        return self.app_env == "development" and self.enable_dev_extraction
+        return self.full_app_enabled and self.enable_dev_extraction
+
+    @field_validator("allowed_origins", mode="before")
+    @classmethod
+    def split_origins(cls, value):
+        """Accept a comma-separated list as well as JSON.
+
+        Hosting dashboards take plain strings, so a deployment should not fail
+        on `a.example,b.example` when only `["a.example"]` was understood.
+        """
+        if not isinstance(value, str):
+            return value
+        text = value.strip()
+        if text.startswith("["):
+            return json.loads(text)
+        return [origin.strip() for origin in text.split(",") if origin.strip()]
 
     @field_validator("local_data_dir")
     @classmethod

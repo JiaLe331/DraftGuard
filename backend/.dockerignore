@@ -1,0 +1,12 @@
+# Only the application, its lockfile and the baked demo store belong in the image.
+.venv/
+.local/
+.ruff_cache/
+__pycache__/
+**/__pycache__/
+*.pyc
+.env
+.env.*
+tests/
+scripts/
+.pytest_cache/

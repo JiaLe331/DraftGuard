@@ -14,6 +14,7 @@ from app.ai.amendment import (
     GeminiAmendmentProvider,
 )
 from app.ai.common import AIProviderError
+from app.ai.risk import DiscrepancyNote, RiskBriefing, RiskBriefingResult
 from app.config import Settings
 from app.dev_extraction import service as extraction_service
 from app.extraction.models import ProviderMetadata
@@ -973,3 +974,92 @@ def test_explicit_empty_pair_waits_for_sources_without_clean_result(task_client)
     assert checked["current_bl_id"] is None
     assert result(checked)["revision_delta"]["resolved"] == []
     assert all(field["finding"] != "MATCH" for field in result(checked)["fields"])
+
+
+class FakeRiskProvider:
+    def __init__(self):
+        self.calls = []
+        self.failure = None
+
+    def explain(self, discrepancies, *, timeout_seconds=None):
+        self.calls.append(discrepancies)
+        if self.failure:
+            raise self.failure
+        return RiskBriefingResult(
+            response=RiskBriefing(
+                notes=[
+                    DiscrepancyNote(field=field, consequence=f"Downstream effect of {field}.")
+                    for field, _, _ in discrepancies
+                ]
+            ),
+            metadata=ProviderMetadata(
+                configured_model="fake-model",
+                model_version="fake-v1",
+                response_id="risk-1",
+                prompt_version="discrepancy-operational-risk-v1",
+                duration_ms=7.5,
+                usage={"total_token_count": 42},
+            ),
+        )
+
+
+def test_risk_briefing_explains_only_confirmed_discrepancies(task_client):
+    """The briefing is advisory: it sees only fields the deterministic comparison
+    already decided, and it never changes the task."""
+    client, settings, _ = task_client
+    task = analyze(client, clone(client))
+    assert set(task["current_run"]["result"]["known_defect_fields"]) == NAMES
+
+    provider = FakeRiskProvider()
+    with TestClient(create_app(settings, risk_provider=provider)) as enabled:
+        response = enabled.post(
+            f"{PREFIX}/{task['id']}/risk-briefing",
+            json={"expected_revision": task["revision"]},
+        )
+        assert response.status_code == 200
+        briefing = response.json()
+        assert {note["field"] for note in briefing["notes"]} == NAMES
+        assert briefing["provider_call"]["operation"] == "risk_briefing"
+        assert briefing["revision"] == task["revision"]
+
+        # Gemini receives the decided fields with both values, nothing wider.
+        handed = provider.calls[0]
+        assert {field for field, _, _ in handed} == NAMES
+        assert all(si and bl for _, si, bl in handed)
+
+        # A stale revision is refused rather than described.
+        stale = enabled.post(
+            f"{PREFIX}/{task['id']}/risk-briefing",
+            json={"expected_revision": task["revision"] + 1},
+        )
+        assert stale.status_code == 409
+        assert stale.json()["detail"]["code"] == "stale_revision"
+
+        # A provider failure surfaces as a stable, retryable error.
+        provider.failure = AIProviderError("AI_TIMEOUT", "Gemini timed out.", retryable=True)
+        failed = enabled.post(
+            f"{PREFIX}/{task['id']}/risk-briefing",
+            json={"expected_revision": task["revision"]},
+        )
+        assert failed.status_code == 502
+        assert failed.json()["detail"]["retryable"] is True
+
+    # Asking for commentary left the task, its run and its findings untouched.
+    after = client.get(f"{PREFIX}/{task['id']}").json()
+    assert after["revision"] == task["revision"]
+    assert after["current_run"]["id"] == task["current_run"]["id"]
+    assert set(after["current_run"]["result"]["known_defect_fields"]) == NAMES
+
+
+def test_risk_briefing_refuses_a_run_without_a_confirmed_discrepancy(task_client):
+    client, settings, _ = task_client
+    task = clone(client)
+    provider = FakeRiskProvider()
+    with TestClient(create_app(settings, risk_provider=provider)) as enabled:
+        response = enabled.post(
+            f"{PREFIX}/{task['id']}/risk-briefing",
+            json={"expected_revision": task["revision"]},
+        )
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "no_discrepancy"
+    assert provider.calls == []

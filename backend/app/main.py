@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.exceptions import HTTPException
 
 from app.ai.amendment import GeminiAmendmentProvider
+from app.ai.risk import GeminiRiskProvider
 from app.api.health import router as health_router
 from app.api.samples import build_router
 from app.api.tasks import build_task_router
@@ -26,6 +27,7 @@ def create_app(
     vision_provider=None,
     semantic_provider=None,
     amendment_provider=None,
+    risk_provider=None,
 ) -> FastAPI:
     settings = settings if settings is not None else Settings()
 
@@ -64,7 +66,13 @@ def create_app(
             amendment_provider or GeminiAmendmentProvider(settings),
         )
         application.include_router(build_router(settings, application.state.mailbox_store))
-        application.include_router(build_task_router(settings, application.state.mailbox_store))
+        application.include_router(
+            build_task_router(
+                settings,
+                application.state.mailbox_store,
+                risk_provider or GeminiRiskProvider(settings),
+            )
+        )
         if settings.dev_extraction_enabled:
             application.include_router(dev_router)
 

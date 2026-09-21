@@ -126,7 +126,7 @@ class UpdateAmendment(AnalyzeTask):
         return value
 
 
-def build_task_router(settings, store):
+def build_task_router(settings, store, risk_provider=None):
     router = APIRouter(prefix="/api/v1/dev/tasks", tags=["local tasks"])
 
     def execute(operation):
@@ -256,6 +256,54 @@ def build_task_router(settings, store):
             )
         )
         return JSONResponse(result, status_code=200 if wait else 202)
+
+    @router.post("/{task_id}/risk-briefing")
+    def risk_briefing(task_id: str, payload: AnalyzeTask, request: Request):
+        """Explain confirmed discrepancies. Advisory only: nothing is stored and
+        nothing here changes the comparison, the reviewed result, or completion."""
+        guard(request)
+        detail = execute(lambda: store.task_detail(task_id))
+        if detail["revision"] != payload.expected_revision:
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "stale_revision",
+                    "message": "This task advanced. Reload before asking again.",
+                },
+            )
+        run = detail.get("current_run") or {}
+        result = run.get("result") or {}
+        fields = {item["key"]: item for item in result.get("fields", [])}
+        discrepancies = [
+            (
+                key,
+                fields[key]["si"]["raw_value"],
+                fields[key]["bl"]["raw_value"],
+            )
+            for key in result.get("known_defect_fields", [])
+            if fields.get(key) and fields[key]["si"]["raw_value"] and fields[key]["bl"]["raw_value"]
+        ]
+        if not discrepancies:
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "no_discrepancy",
+                    "message": "This run has no confirmed discrepancy to explain.",
+                },
+            )
+        briefing = execute(lambda: risk_provider.explain(discrepancies))
+        return {
+            "task_id": task_id,
+            "revision": detail["revision"],
+            "run_id": run.get("id"),
+            "notes": [note.model_dump() for note in briefing.response.notes],
+            "provider_call": {
+                "operation": "risk_briefing",
+                "document_id": None,
+                "provider": "gemini",
+                **briefing.metadata.model_dump(mode="json"),
+            },
+        }
 
     @router.post("/{task_id}/reviews")
     def review(task_id: str, payload: ReviewTask, request: Request):

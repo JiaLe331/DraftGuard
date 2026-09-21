@@ -1,6 +1,7 @@
 """Server-side AI provider adapters."""
 
 from .common import AIProviderError
+from .risk import GeminiRiskProvider
 from .semantic import (
     GeminiSemanticProvider,
     add_input_too_large,
@@ -12,6 +13,7 @@ from .vision import GeminiVisionProvider, VisionProviderError, apply_visual_cand
 
 __all__ = [
     "AIProviderError",
+    "GeminiRiskProvider",
     "GeminiSemanticProvider",
     "GeminiVisionProvider",
     "VisionProviderError",

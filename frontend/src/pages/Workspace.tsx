@@ -1,4 +1,6 @@
 import { AnalysisActivity } from '../components/AnalysisActivity'
+import { RiskBriefing } from '../components/RiskBriefing'
+import { RunProvenance } from '../components/RunProvenance'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useLocation, useParams, useSearchParams } from 'react-router'
 import {
@@ -402,23 +404,12 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
           <p className="preserve-lines">{task.body}</p>
         </div>
       </details>
-      <div className="version-bar">
-        <div className="document-pair">
-          <span>
-            Source revision <strong>{task.revision}</strong>
-          </span>
-          <span>
-            {task.current_run?.mode === 'precomputed'
-              ? 'Precomputed · Rules'
-              : task.current_run
-                ? result?.provider_calls?.length
-                  ? 'On demand · Rules + AI extraction'
-                  : 'On demand · Rules'
-                : 'Not analyzed'}
-          </span>
-        </div>
-        <span className="small-text">{task.current_run?.pipeline_version} · Saved locally</span>
-      </div>
+      <RunProvenance
+        result={task.current_run ? (result ?? null) : null}
+        revision={task.revision}
+        mode={task.current_run?.mode}
+        pipelineVersion={task.current_run?.pipeline_version}
+      />
       <RevisionChanges task={task} />
       {!!task.current_run?.review_progress?.total && (
         <div className="notice ai-review-progress" aria-live="polite">
@@ -480,6 +471,14 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
               <span>{result?.known_defect_fields.length ?? 0} discrepancies</span>
               <span>{fields.filter((f) => f.finding === 'NEEDS_REVIEW').length} need review</span>
             </div>
+            {!task.is_historical && (
+              <RiskBriefing
+                key={`${task.id}-${task.revision}`}
+                taskId={task.id}
+                revision={task.revision}
+                discrepancies={result?.known_defect_fields ?? []}
+              />
+            )}
             <div role="table" aria-label="Seven-field comparison">
               <div className="comparison-head comparison-grid" role="row">
                 {['FIELD', 'SHIPPING INSTRUCTION', 'DRAFT BILL OF LADING', 'FINDING'].map(

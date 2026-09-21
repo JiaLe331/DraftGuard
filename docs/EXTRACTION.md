@@ -200,7 +200,8 @@ Interactive request forms are at [API docs](http://127.0.0.1:8000/docs).
 | `GET /api/v1/dev/runs/{run_id}/events?after_sequence=0&limit=100` | Ordered event page, continuation cursor, terminal status, and live/legacy trace mode |
 | `GET /api/v1/dev/runs/{run_id}` | Full saved run, documents, extraction results, and events; `?download=true` downloads the audit JSON |
 | `GET /api/v1/dev/runs/{run_id}/documents/{document_id}/original` | Exact original; `?disposition=inline` allows validated PDFs inline |
-| `POST /api/v1/dev/tasks/{task_id}/reviews` | Append a current-run visual `CONFIRM_CANDIDATE` or `CORRECT_EXTRACTION` event and return full task detail |
+| `POST /api/v1/dev/tasks/{task_id}/reviews` | Append current-run `CONFIRM_CANDIDATE`, `CORRECT_EXTRACTION`, or `SUPPLY_INFORMATION` and return full task detail |
+| `POST /api/v1/dev/tasks/{task_id}/complete` | Idempotently acknowledge an eligible exact current revision/run and return full task detail |
 
 Both POST extraction endpoints accept `?wait=false`: HTTP 202 returns the saved
 initial run (including `run_id`) once processing has been scheduled. Uploaded bytes
@@ -260,7 +261,7 @@ use its default `wait=True` from a worker thread for synchronous integration. `e
 does not write history. Its optional `observer` callback receives real processing
 events; the API worker uses that callback to record the audit.
 
-### Visual review overlay
+### Human review overlay and completion
 
 The saved run's `result` is immutable machine output. Public task runs also expose
 `reviewed_result`, `review_actions`, and `review_progress`. Review events are
@@ -282,12 +283,54 @@ cannot be written.
 }
 ```
 
+`SUPPLY_INFORMATION` is accepted only when the selected current source side is
+`MISSING`, `AMBIGUOUS`, or `UNREADABLE`. It requires a nonempty supplied value,
+source name, and checkable reference; its optional note and deterministic normalized
+value are retained. It has no PDF page and is not source evidence. The server does
+not fetch or validate references.
+
+```json
+{
+  "expected_revision": 3,
+  "run_id": "run-id",
+  "document_id": "document-id",
+  "field": "gross_weight_kg",
+  "action": "SUPPLY_INFORMATION",
+  "raw_value": "131,058 KG",
+  "provenance": {
+    "source_name": "Carrier confirmation",
+    "reference": "Email dated 21 Sep 2026",
+    "note": "Confirmed by forwarding agent"
+  }
+}
+```
+
 One reviewed side does not establish a comparison. Both SI and BL must be present
 and reviewed before the deterministic rules produce `MATCH` or `MISMATCH` and add
 to coverage. A missing candidate cannot be confirmed as missing, but it can be
 corrected when the reviewer sees a value. Later actions change the displayed overlay
-without deleting earlier events. All visual candidates can lead to `READY` or
-`DISCREPANCIES_FOUND`, never `CHECK_COMPLETE`.
+without deleting earlier events. Supplied information leaves the extraction state,
+finding, coverage, and review requirement unresolved; the formal source must be
+replaced to remove that blocker.
+
+Task runs expose `completion` and `completion_eligibility`. Completion is permitted
+only for the exact current successful local run with the current SI and BL, seven of
+seven fields, seven `MATCH` findings, no discrepancy, no review requirement, no
+pending visual candidate, and no current supplied-information overlay. The request is:
+
+```json
+{
+  "expected_revision": 3,
+  "run_id": "run-id",
+  "acknowledge_seven_field_scope": true
+}
+```
+
+Blocked requests return HTTP 409 `completion_blocked` with structured blockers;
+stale revision/run writes return `stale_completion`. Repeating the same valid request
+returns the existing acknowledgment. A completed run rejects new review events and
+derives `CHECK_COMPLETE` without mutating its machine `result`. Reanalysis or source
+replacement creates a new current run; the old acknowledgment remains historical.
 
 ## Setup and local command
 
@@ -354,7 +397,8 @@ machine result.
 An issue includes a stable `code`, message, next action, optional field, and
 challenge reason. Missing labels mean "not located by these rules", not proof
 that the business information does not exist anywhere in the original document.
-There is no task completion or match status in an extraction response.
+Standalone extraction responses have no task completion or match status. Completion
+exists only on local task runs after deterministic comparison and explicit acknowledgment.
 
 ## Source evidence
 
@@ -471,5 +515,6 @@ containment, feature gating, and CORS. From `frontend/`, run `pnpm test`, `pnpm 
 selection, multipart upload, duplicate submissions, source evidence, history, and
 failed saves. Vision tests cover separate calls, strict response/page/role checks,
 provider metadata and error mapping, immutable machine results, partial/full review,
-corrections, stale writes, and restart recovery without a Gemini key. The browser
-workflow above exercises the actual API and supplied files.
+corrections, supplied-information provenance/blockers, exact-run completion,
+completed-run locking, stale writes, and restart recovery without a Gemini key. The
+browser workflow above exercises the actual API and supplied files.

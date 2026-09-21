@@ -4,7 +4,7 @@
 
 DraftGuard is an independent document-review workspace with a familiar email-inspired visual language. Overview summarizes the entire supplied mailbox; Inbox provides a searchable, paginated email view. Both lead into the same source-backed workspace. No personal Gmail or live mailbox is connected.
 
-Keep white panels on a pale gray-blue canvas, blue primary actions, system sans-serif typography, Phosphor icons, and text/icon status labels. Red signals discrepancies or failures, amber review requirements, and blue readiness. Readiness is not completion. Respect reduced-motion preferences.
+Keep white panels on a pale gray-blue canvas, blue primary actions, system sans-serif typography, Phosphor icons, and text/icon status labels. Red signals discrepancies or failures, amber review requirements, blue readiness, and green an acknowledged completed check. Status never relies on color alone. Respect reduced-motion preferences.
 
 At 1280px and above, comparison and evidence sit side by side. Evidence moves below the comparison at intermediate widths. Phones use paired SI/BL value cards and a navigation drawer. Selecting a field focuses and scrolls to the evidence region.
 
@@ -24,8 +24,9 @@ The list uses 50-item server pagination and dataset order. Filters reset paginat
 - Reanalysis starts a saved, bounded background operation. Busy controls prevent duplicate submissions. Completed attempts are saved before the current result is refreshed. A failed latest attempt leaves the previous successful result visible with a failure banner.
 - Visual SI/BL cells carry text-and-icon states: **AI candidate · Confirmation required**, **Confirmed**, or **Corrected**. The evidence panel embeds the actual candidate PDF page, identifies machine raw/normalized values and page, and labels model excerpts as unconfirmed visual evidence.
 - Current local tasks allow **Confirm candidate** and **Correct extraction** for Gemini visual candidates. Correction uses visible labels for value and evidence page; busy state blocks duplicate submission, form errors stay adjacent, success uses `aria-live`, and the latest unverified demo actor is visible. Missing candidates cannot be confirmed.
-- `Ready for review` means seven fields match after both sides are source-backed; it does not record human approval. Local tasks support real source replacements, version changes, and append-only review overlays. Completion acknowledgment remains unavailable.
-- Print report opens a readable in-page preview. The browser print action uses the same report component, removes navigation, repeats table headers, and includes source IDs/hashes, evidence, unresolved items, actual run metadata, and the absence of a human completion acknowledgment. Native print dialogs depend on browser support.
+- A current missing, ambiguous, or unreadable source side offers the secondary **Supply information** action. Its progressively disclosed form records value, source name, reference, and optional note and states that it is for handover only. HTTPS references are links; all other references remain text. The overlay stays unresolved and blocks completion until the formal source is replaced.
+- The completion eligibility card lists Documents, Seven fields, Discrepancies, Pending review, and External supplied information with text and icons. Only an eligible exact current run exposes the single primary **Complete seven-field check** action. Its native modal moves focus inside, supports Escape/Cancel, restores focus, names task/revision/run/actor/scope, and prevents duplicate submission. `CHECK_COMPLETE` is a bounded acknowledgment, not legal or cargo-release approval.
+- Print report opens a readable reviewed-result preview. The browser print action uses the same report component, removes navigation, repeats table headers, and includes designation, exact source IDs/versions/hashes, machine and reviewed values, evidence, Confirm/Correct/Supply ledger, revision delta, actual run metadata, and completion acknowledgment or blockers. Historical reports are visibly read only. Native print dialogs depend on browser support.
 
 ## Routes and failures
 
@@ -35,9 +36,9 @@ Handle loading, dataset not imported, no search results, invalid/missing task, A
 
 ## Verification and current limits
 
-Run the frontend checks in README. Component tests exercise server totals/pagination, retry without fixture fallback, empty import, actual evidence links, scan-candidate states, embedded page loading, confirmation/correction busy and error feedback, focus movement, historical read-only state, report preview, failed rerun recovery, and stale-response handling. Backend tests own the authoritative document and comparison rules.
+Run the frontend checks in README. Component tests exercise server totals/pagination, retry without fixture fallback, empty import, actual evidence links, scan-candidate states, embedded page loading, confirmation/correction and supply forms, completion eligibility/dialog/success, reviewed report ledger, focus movement, historical read-only state, failed rerun recovery, and stale-response handling. Backend tests own the authoritative document, comparison, and completion rules.
 
-This UI is backed by a local development mailbox. Gemini scan candidates and minimal human confirmation/correction are implemented but require explicit server configuration for real calls. Multi-user sessions, cloud persistence, supplied-information review, completion acknowledgment, and the PRD's public deployment gate remain future work. Development runtime data is not part of the Git changes.
+This UI is backed by a local development mailbox. Gemini scan candidates require explicit server configuration for real calls; human confirmation/correction, supplied-information handover, exact-run completion, and reviewed reporting are local and persisted in SQLite. Multi-user sessions, cloud persistence, Gemini email/text fallbacks, and the PRD's public deployment gate remain future work. Development runtime data is not part of the Git changes.
 
 ## Local extraction
 
@@ -93,4 +94,4 @@ Sample workspaces offer creation of a local task copy. Inbox lists those tasks s
 
 The comparison shows resolved, persisting, new, and uncertain field changes against a fixed prior-version run. Uncertainty is not resolution. A same-revision rerun retains the version baseline. History selection opens a read-only run snapshot and report bound to its exact documents; return to the current version to modify sources. Source changes invalidate the previous result's current designation. Machine readiness never implies human completion.
 
-For scans, the comparison renders the derived `reviewed_result` while the print report intentionally keeps the immutable machine `result` and says machine-only/incomplete. Review progress reports handled/total candidate sides. A field remains `NEEDS_REVIEW` until both SI and BL are confirmed or corrected; only then does the backend recompute the deterministic finding and coverage. Refresh, restart, and historical views rebuild this state from the saved machine run and append-only review events.
+For scans, both the comparison and report render the derived `reviewed_result` while retaining machine values for audit. Review progress reports handled/total candidate sides. A field remains `NEEDS_REVIEW` until both SI and BL are confirmed or corrected; only then does the backend recompute the deterministic finding and coverage. Refresh, restart, and historical views rebuild this state from the saved machine run, append-only review events, and append-only completion acknowledgment.

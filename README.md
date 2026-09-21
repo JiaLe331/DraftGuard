@@ -2,7 +2,7 @@
 
 DraftGuard turns the organizer's shipping-document dataset into a local demo mailbox. It imports original email JSON and attachments, runs rule-first classification and seven-field SI / draft-BL comparison, can send image-only PDFs to a server-side Gemini adapter, and saves machine results plus human review overlays in SQLite. Overview, Inbox, and the verification workspace use the backend API; no personal Gmail account is connected.
 
-This is a **local development milestone**. Gemini scan extraction is implemented but disabled until both server-side settings are supplied. Cloud persistence, public deployment, supplied-information review, and completion acknowledgment are not connected. A match means **Ready for review**, never completed or approved.
+This is a **local development milestone**. Gemini scan extraction is available only when both server-side settings are supplied. Local working copies now support source-backed confirmation/correction, externally supplied information with provenance, exact-run completion acknowledgment, and reviewed current/historical reports. Cloud persistence, session ownership, public deployment, Gemini email classification, and readable-text semantic fallback are not connected. `CHECK_COMPLETE` means the bounded seven-field check was acknowledged; it is not legal or cargo-release approval.
 
 ## Requirements and installation
 
@@ -126,9 +126,11 @@ Manual acceptance uses the organizer's original `email_512` SI and draft-BL PDFs
 1. First leave both Gemini settings empty, restart, create an `email_512` working copy, explicitly select its SI and draft-BL attachments as the current pair, and analyze it. Verify `AI_NOT_CONFIGURED`, no fabricated candidates, and a visible retry path.
 2. Set the key and explicit model, restart, and reanalyze the same current revision. Audit Trail must show two separate PDF calls—one SI and one BL—with prompt/model/response/timing and available usage metadata, but no key or full document content.
 3. Verify 14 pending candidates. Select every SI/BL cell, compare it with the embedded original page, then choose **Confirm candidate** or **Correct extraction** with the actual page.
-4. Confirm a field remains **Needs review** until both sides are handled. After all 14 actions, expect 7/7 checked and either **Ready for review** or **Discrepancies found**, never completed.
-5. Refresh the browser and restart the backend. Verify the machine result, reviewed comparison, and append-only review activity all return; open an older run and verify it is read only.
-6. Inspect 1440, 1024, 768, and 375 px layouts, keyboard focus, 44 px actions, and reduced-motion behavior. The printable report intentionally remains machine-only/incomplete in this milestone.
+4. Confirm a field remains **Needs review** until both sides are handled. After all 14 actions, expect 7/7 checked and either **Ready for review** or **Discrepancies found**.
+5. If all seven findings match, use the eligibility card and acknowledgment dialog to complete the exact current run. Verify the state becomes `CHECK_COMPLETE`; a mismatch, pending candidate, or supplied-information event blocks completion.
+6. Refresh the browser and restart the backend. Verify the machine result, reviewed comparison, completion, and append-only review activity all return; open an older run and verify it is read only.
+7. Open the report and verify its designation, exact source versions/hashes, reviewed values, full Confirm/Correct/Supply ledger, and completion acknowledgment or blockers.
+8. Inspect 1440, 1024, 768, and 375 px layouts, 200% zoom, keyboard focus, 44 px actions, landscape, print pagination, and reduced-motion behavior.
 
 If the default ports are occupied, run the backend on 8001 and the frontend on 5174:
 
@@ -158,7 +160,7 @@ Search by email ID, subject, sender, or body. Inbox pages contain 50 emails in d
 
 Use **Reanalyze** to run the same pipeline on the stored immutable sources. It saves a new run, marks it **On demand · Rules**, and refreshes the current result. Import-time runs are labeled **Precomputed · Rules**. A failed rerun keeps the last successful result visible with an explicit failure notice. Refreshes and backend restarts preserve saved results.
 
-**Print report** opens an in-page report preview using the same report component and table styling as printing. **Print / Save PDF** invokes the browser print dialog where supported. The report includes source versions, hashes, raw/normalized values, evidence, unresolved requirements, and the absence of human approval. The in-app browser may not expose a system print dialog; use a normal browser to print or save a PDF.
+**Print report** opens an in-page reviewed-report preview using the same component and table styling as printing. **Print / Save PDF** invokes the browser print dialog where supported. The report identifies machine-only, human-reviewed, or completed output and includes exact source versions/hashes, machine and reviewed values, evidence, the complete review ledger, revision changes, and completion acknowledgment or blockers. The in-app browser may not expose a system print dialog; use a normal browser to print or save a PDF.
 
 The former hand-authored prototype and browser snapshots are no longer used. Local tasks support source replacement, revision comparison, and append-only visual-candidate confirmation/correction as described below. Completion acknowledgment remains future work.
 
@@ -170,7 +172,9 @@ In a local task, add or replace SI/BL files, or explicitly select the pair when 
 
 Revision changes compare against the saved prior-version baseline: resolved, persisting, new confirmed discrepancies, and fields that became uncertain. An uncertain field is never counted as resolved. Reanalyzing the same revision retains its comparison baseline. Results from older revisions stay historical and cannot replace the current result. The history selector opens the exact run's files, evidence, and report; a new revision without a successful result is not presented as a completed check.
 
-Try the primary revision scenario with `email_004` and the explicitly team-created fixtures under `backend/tests/fixtures/revisions/`: v2 fixes the two names but changes gross weight to `130,058 KG`; v3 restores `131,058 KG`. Process these through normal task upload. For scanned PDFs, only AI visual candidates can be confirmed or corrected; machine output remains immutable and the reviewed result is derived from saved events. All-seven matches mean **Ready for review**, not approval. Supplied information and completion acknowledgments are not part of this milestone.
+Try the primary revision scenario with `email_004` and the explicitly team-created fixtures under `backend/tests/fixtures/revisions/`: v2 fixes the two names but changes gross weight to `130,058 KG`; v3 restores `131,058 KG`. Process these through normal task upload. For scanned PDFs, only AI visual candidates can be confirmed or corrected; machine output remains immutable and the reviewed result is derived from saved events. A current run with seven matches, no pending review, and no supplied-information blocker can be acknowledged as `CHECK_COMPLETE`. Reanalysis or a source replacement creates a new current run that requires its own acknowledgment.
+
+For a missing, ambiguous, or unreadable value on the current SI/BL side, **Supply information** records a value, source name, checkable reference, and optional note for handover. It does not edit the machine extraction, increase coverage, resolve `NEEDS_REVIEW`, or permit completion. Replace the formal source and reanalyze to resolve the blocker. HTTPS references are rendered as links; other references remain text and are not fetched or verified.
 
 This is a single local development workspace, not session-isolated cloud storage. Keep it bound to loopback. Production task routes, no-login session ownership, and the public deployment gate remain separate work.
 
@@ -237,7 +241,8 @@ Local task endpoints (development only):
 | `POST /api/v1/dev/tasks/{id}/documents` | Multipart `file`, `role` (`si`/`bl`), `expected_revision`; saves an immutable source and advances revision |
 | `POST /api/v1/dev/tasks/{id}/pair` | JSON `si_id`, `bl_id` (nullable), `expected_revision`; explicitly selects current attachments |
 | `POST /api/v1/dev/tasks/{id}/analyze` | JSON `expected_revision`; `?wait=false` uses existing bounded background execution |
-| `POST /api/v1/dev/tasks/{id}/reviews` | Appends `CONFIRM_CANDIDATE` or `CORRECT_EXTRACTION` for the current revision/run/document/field and returns the updated task; stale writes return 409 |
+| `POST /api/v1/dev/tasks/{id}/reviews` | Appends `CONFIRM_CANDIDATE`, `CORRECT_EXTRACTION`, or `SUPPLY_INFORMATION` for the current revision/run/document/field and returns the updated task; stale/completed writes return 409 |
+| `POST /api/v1/dev/tasks/{id}/complete` | Acknowledges the exact eligible current run and seven-field scope; returns structured blockers for ineligible runs and is idempotent after success |
 | `GET /api/v1/dev/tasks/{id}/runs/{run_id}` | Read-only snapshot with exact run sources, results, and historical designation |
 | `GET /api/v1/dev/tasks/{id}/documents/{document_id}/content` | Registered task source; `?download=true` downloads its immutable bytes |
 

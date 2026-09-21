@@ -1,0 +1,33 @@
+{
+  "version": "localhost-p0-v1",
+  "classification_cases": [
+    {"id": "class-bl", "subject": "Check draft BL", "body": "Please compare the SI and draft BL.", "expected": "BL_COMPARISON"},
+    {"id": "class-si", "subject": "Request SI", "body": "Customer SI needed for this booking.", "expected": "SI_REQUEST"},
+    {"id": "class-invoice", "subject": "Query on invoice", "body": "Please review the local charges.", "expected": "INVOICE_QUERY"},
+    {"id": "class-general", "subject": "Team meeting", "body": "Update summary for tomorrow's team meeting.", "expected": "GENERAL"},
+    {"id": "class-spam", "subject": "Congratulations", "body": "Claim your prize gift card now.", "expected": "SPAM"}
+  ],
+  "document_cases": [
+    {"id": "txt-si", "path": "tests/fixtures/extraction/email_004_SI.txt", "format": "txt", "expected_role": "SI"},
+    {"id": "docx-bl", "path": "tests/fixtures/extraction/email_055_BL.docx", "format": "docx", "expected_role": "BL"},
+    {"id": "xlsx-si", "path": "tests/fixtures/extraction/email_055_SI.xlsx", "format": "xlsx", "expected_role": "SI"},
+    {"id": "pdf-si", "path": "tests/fixtures/extraction/email_160_SI.pdf", "format": "pdf", "expected_role": "SI"}
+  ],
+  "field_case": {
+    "document_case_id": "txt-si",
+    "expected": {
+      "shipper": "APRIL FAR EAST (M) SDN BHD",
+      "consignee": "EAST BRIGHT FZ-LLC",
+      "notify_party": "EAST BRIGHT FZ-LLC",
+      "port_of_loading": "NANTONG, CHINA (CNNTG)",
+      "port_of_discharge": "KARACHI, PAKISTAN (PKKHI)",
+      "container_count": "6",
+      "gross_weight_kg": "131058"
+    }
+  },
+  "quote_mismatch_case": {
+    "source": "Gross Weight (KG): 131,058 KG",
+    "quote": "Gross Weight (kg): 131,058 KG",
+    "expected_valid": false
+  }
+}

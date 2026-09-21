@@ -3,10 +3,12 @@
 This milestone implements rule-first extraction from one TXT, PDF, DOCX, or XLSX
 document. It returns seven shipment fields with original values, canonical values,
 source evidence, and review issues. A development API connects that extractor to
-Inbox uploads, dataset emails, and SQLite audit history. Valid PDFs with no usable
-text can use the server-side Gemini adapter for visual candidates; those candidates
-remain unverified until a human confirms or corrects them. There is no OCR/text
-fallback, paired-document backfill, live mailbox connection, or automatic completion.
+Inbox uploads, dataset emails, and SQLite audit history. The shared Gemini adapter
+handles only inconclusive email intent, bounded readable-text fields, and valid PDFs
+with no usable text. Readable-text output requires an exact quote from one stable
+source unit; visual candidates remain unverified until a human confirms or corrects
+them. There is no OCR service, paired-document backfill, live mailbox connection, or
+AI-driven comparison/completion.
 
 ## Try it in the browser (no Docker needed)
 
@@ -36,9 +38,9 @@ fallback, paired-document backfill, live mailbox connection, or automatic comple
    `capabilities.development_extraction`. No cloud credentials or Docker services are needed.
 
 **Dataset emails:** import the dataset using the [README command](../README.md)
-before starting the backend. Search `email_004` in Inbox, open the email, and click
-**Analyze email**. This classifies the email, extracts both attachments, and compares
-the SI/BL fields. Merely opening an email never processes it.
+before starting the backend. Search `email_004` in Inbox, open the read-only sample,
+create a working copy, and click **Start analysis**. This classifies the email, extracts
+both attachments, and compares the SI/BL fields. Merely opening a sample never processes it.
 
 **Upload:** click **Upload document** in Inbox, select `backend/tests/fixtures/extraction/email_160_SI.pdf`, optionally
 choose SI, and click **Extract document**. The result includes all seven fields,
@@ -84,7 +86,7 @@ history and extractor, while retaining their mailbox comparison results.
 
 1. Import the organizer mailbox using the command in [README](../README.md), before
    starting the API. Stop the API before running the CLI against its databases.
-2. Open **Inbox**, select an email, and choose **Analyze email** or **Reanalyze**.
+2. Open **Inbox**, select an organizer sample, create a working copy, and choose **Analyze email** or **Reanalyze** on that task. Samples are read only.
 3. Open **View live audit** during processing or **View audit trail** afterward.
    Audit history can be filtered to **Mailbox analysis**. Each analysis-history row
    links to its own audit, and an audit links back to the mailbox results.
@@ -94,22 +96,24 @@ history and extractor, while retaining their mailbox comparison results.
 The frontend uses a saved background run. Synchronous API calls remain supported:
 
 ```sh
-curl -X POST "http://127.0.0.1:8000/api/v1/dev/samples/email_004/analyze?wait=false" \
+curl -X POST "http://127.0.0.1:8000/api/v1/dev/tasks/TASK_ID/analyze?wait=false" \
   -H "Content-Type: application/json" -d '{"expected_revision":1}'
 ```
 
 The 202 response contains mailbox detail, including `latest_run.audit_run_id`.
-Poll `/api/v1/samples/email_004` for results or
+Poll `/api/v1/records/TASK_ID` for results or
 `/api/v1/dev/runs/{audit_run_id}/events` for the live trace. Omitting `wait=false`
 waits for completion and returns 200. Duplicate/stale submissions return 409;
 exhausted shared capacity returns retryable 503.
 
-Classification rules and the seven-field comparison workflow are retained. Only
-emails classified for BL comparison extract/compare their attachments; other
-categories record classification and explicit skipped steps. Gemini is considered
-only for a valid PDF whose parser returns `NO_USABLE_TEXT`; malformed, encrypted,
-oversized, or readable documents are never sent to the vision provider. Missing
-values and units remain unresolved.
+Classification rules and the seven-field comparison workflow are retained. A single
+clear classification rule does not call Gemini; zero matches or conflicting matches
+use structured semantic classification. Only emails classified for BL comparison
+extract/compare their attachments. Readable SI and BL documents are processed in
+separate Gemini text requests only for fields that deterministic rules cannot locate
+or interpret reliably. Exact source-unit quotes are verified with whitespace-only
+normalization. Image-only PDFs may enter the separate vision path. Explicit missing
+values, placeholders, formulas, and missing/conflicting units are never filled by AI.
 
 New analyses use `mailbox-shared-2` and the exact shared document contract. Earlier
 mailbox results remain readable with `audit_run_id: null` and no invented events;
@@ -139,6 +143,7 @@ is not a crash-proof distributed or production ledger.
 | `GEMINI_API_KEY` | Empty; server-side only, required with `GEMINI_MODEL` for scan candidates |
 | `GEMINI_MODEL` | Empty; must be an explicit model ID, with no code default or automatic upgrade |
 | `GEMINI_TIMEOUT_SECONDS` | 30 seconds per provider call; capped below the local run deadline |
+| `GEMINI_TEXT_MAX_CHARS` | 100,000 characters per readable document; over-limit input fails with `AI_INPUT_TOO_LARGE` and is never silently truncated |
 
 Use absolute paths for path overrides, for example
 `DATASET_DIR="D:/Ash Stuff/Coding/2026 Averis Monash/sdoc-hackathon-bundle"`.

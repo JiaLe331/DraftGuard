@@ -1,8 +1,8 @@
 # DraftGuard
 
-DraftGuard turns the organizer's shipping-document dataset into a local demo mailbox. It imports original email JSON and attachments, runs rule-first classification and seven-field SI / draft-BL comparison, can send image-only PDFs to a server-side Gemini adapter, and saves machine results plus human review overlays in SQLite. Overview, Inbox, and the verification workspace use the backend API; no personal Gmail account is connected.
+DraftGuard turns the organizer's shipping-document dataset into a local demo mailbox. It imports original email JSON and attachments, runs rule-first classification and seven-field SI / draft-BL comparison, uses server-side Gemini only for ambiguous classification, bounded readable-text fallback, or image-only PDFs, and saves machine results plus human review overlays in SQLite. Overview, Inbox, and the verification workspace use the backend API; no personal Gmail account is connected.
 
-This is a **local development milestone**. Gemini scan extraction is available only when both server-side settings are supplied. Local working copies now support source-backed confirmation/correction, externally supplied information with provenance, exact-run completion acknowledgment, and reviewed current/historical reports. Cloud persistence, session ownership, public deployment, Gemini email classification, and readable-text semantic fallback are not connected. `CHECK_COMPLETE` means the bounded seven-field check was acknowledged; it is not legal or cargo-release approval.
+This is a **localhost-first development milestone**. Organizer samples are read only; create a working copy or a blank local task before analysis or review. Gemini paths are available only when both server-side settings are supplied. Local tasks support rule/text/visual source-backed correction, visual confirmation, externally supplied information with provenance, exact-run completion acknowledgment, and reviewed current/historical reports. Cloud persistence, session ownership, and public deployment are intentionally deferred. `CHECK_COMPLETE` means the bounded seven-field check was acknowledged; it is not legal or cargo-release approval.
 
 ## Requirements and installation
 
@@ -22,7 +22,7 @@ uv sync --frozen
 cp .env.example .env
 ```
 
-Environment files are optional; rule-only development and automated tests need no cloud credentials. Keep actual secrets out of the repository and browser variables. Tests inject a fake vision provider and never call Gemini.
+Environment files are optional; rule-only development and automated tests need no cloud credentials. Keep actual secrets out of the repository and browser variables. Tests inject fake semantic/vision providers and never call Gemini.
 
 ## Import and preanalyze the mailbox
 
@@ -57,7 +57,7 @@ uv run --frozen python -m app.cli import-dataset \
 
 On a fresh store, the first 20 emails in dataset order remain genuinely unclassified and unanalyzed; the other 500 are precomputed. This is an import policy, not a hardcoded result or per-ID classification. The option never deletes existing runs: after a user analyzes a pending email, repeated imports preserve that result. Restart the backend after changing stores. The previous `.local/mailbox.sqlite3` and objects remain intact; switch `LOCAL_DATA_DIR` back to `.local` to reopen them.
 
-Choose **Awaiting analysis**, open an email, and select **Start analysis** in the compact attachment workbench. Real filenames, formats, and sizes link to the existing preview. Only two attachments initially appear; expand to see more. Emails without attachments can still be classified.
+Choose a sample, select **Create working copy**, then run analysis in the task workspace. Alternatively, use the Inbox's primary **Create local task** action and enter subject, sender, and body before uploading SI/BL sources. Samples remain read only. Real filenames, formats, and sizes link to the existing preview. Only two attachments initially appear; expand to see more. Tasks without attachments can still be classified.
 
 The request starts immediately. A scan animation represents overall processing, not measured stages or percentages. Successful manual runs have a minimum four-second presentation window: if the backend finishes early, the UI continues the captions with **Preparing your results…** and opens the result automatically. There is no skip button or save announcement during loading. Slow requests have no additional wait. Errors appear immediately; reanalysis preserves the prior result. Backend timestamps and processing time are unchanged. Reduced motion disables animation and the presentation hold. Refreshing a saved task shows results immediately without replaying the animation.
 
@@ -96,7 +96,7 @@ pnpm dev
 
 Open <http://localhost:5173/overview>. Both services are needed. Before import the UI shows an empty-mailbox explanation; when the backend is unavailable it offers a connection retry, without fabricated fallback results.
 
-## Scanned-PDF AI configuration and local acceptance
+## Gemini configuration and local acceptance
 
 Do not configure a key for automated development: the provider and review tests use an injected fake. For a real manual check, edit `backend/.env` on your machine and set both values explicitly:
 
@@ -104,6 +104,7 @@ Do not configure a key for automated development: the provider and review tests 
 GEMINI_API_KEY=your-server-side-key
 GEMINI_MODEL=your-explicit-model-id
 GEMINI_TIMEOUT_SECONDS=30
+GEMINI_TEXT_MAX_CHARS=100000
 ```
 
 The frontend needs no provider variable. Restart the backend after every setting change:
@@ -162,17 +163,17 @@ Use **Reanalyze** to run the same pipeline on the stored immutable sources. It s
 
 **Print report** opens an in-page reviewed-report preview using the same component and table styling as printing. **Print / Save PDF** invokes the browser print dialog where supported. The report identifies machine-only, human-reviewed, or completed output and includes exact source versions/hashes, machine and reviewed values, evidence, the complete review ledger, revision changes, and completion acknowledgment or blockers. The in-app browser may not expose a system print dialog; use a normal browser to print or save a PDF.
 
-The former hand-authored prototype and browser snapshots are no longer used. Local tasks support source replacement, revision comparison, and append-only visual-candidate confirmation/correction as described below. Completion acknowledgment remains future work.
+The former hand-authored prototype and browser snapshots are no longer used. Local tasks support source replacement, revision comparison, append-only correction for rule/text/visual extraction, visual-candidate confirmation, and exact-run completion as described below.
 
 ## Local task revisions
 
-Open a sample workspace and create a local task copy before changing sources. The sample's files and results remain intact. Copies retain email context and immutable source bytes, but their first analysis runs the real pipeline rather than copying predictions. Local tasks are available from Inbox and survive refreshes and backend restarts.
+Open a sample workspace and create a local task copy before changing sources, or use **Create local task** for a blank revision-one task. The sample's files and results remain intact. Copies retain email context and immutable source bytes, but their first analysis runs the real pipeline rather than copying predictions. Local tasks are available from Inbox and survive refreshes and backend restarts.
 
 In a local task, add or replace SI/BL files, or explicitly select the pair when attachments are ambiguous. A source change advances the task revision and automatically requests a full seven-field analysis. If analysis submission fails, the source revision remains saved and can be retried. Selecting a role does not override content-based document validation. Development uploads use the configured smaller upload limit, not the PRD's eventual cloud upload allowance.
 
 Revision changes compare against the saved prior-version baseline: resolved, persisting, new confirmed discrepancies, and fields that became uncertain. An uncertain field is never counted as resolved. Reanalyzing the same revision retains its comparison baseline. Results from older revisions stay historical and cannot replace the current result. The history selector opens the exact run's files, evidence, and report; a new revision without a successful result is not presented as a completed check.
 
-Try the primary revision scenario with `email_004` and the explicitly team-created fixtures under `backend/tests/fixtures/revisions/`: v2 fixes the two names but changes gross weight to `130,058 KG`; v3 restores `131,058 KG`. Process these through normal task upload. For scanned PDFs, only AI visual candidates can be confirmed or corrected; machine output remains immutable and the reviewed result is derived from saved events. A current run with seven matches, no pending review, and no supplied-information blocker can be acknowledged as `CHECK_COMPLETE`. Reanalysis or a source replacement creates a new current run that requires its own acknowledgment.
+Try the primary revision scenario with `email_004` and the explicitly team-created fixtures under `backend/tests/fixtures/revisions/`: v2 fixes the two names but changes gross weight to `130,058 KG`; v3 restores `131,058 KG`. Process these through normal task upload. Visual candidates can be confirmed or corrected against a PDF page; rule and Gemini-text values can be corrected only against a selected source unit containing the value. Machine output remains immutable and the reviewed result is derived from saved events. A current run with seven matches, no pending review, and no supplied-information blocker can be acknowledged as `CHECK_COMPLETE`. Reanalysis or a source replacement creates a new current run that requires its own acknowledgment.
 
 For a missing, ambiguous, or unreadable value on the current SI/BL side, **Supply information** records a value, source name, checkable reference, and optional note for handover. It does not edit the machine extraction, increase coverage, resolve `NEEDS_REVIEW`, or permit completion. Replace the formal source and reanalyze to resolve the blocker. HTTPS references are rendered as links; other references remain text and are not fetched or verified.
 
@@ -183,7 +184,7 @@ This is a single local development workspace, not session-isolated cloud storage
 In `backend/.env`, set `APP_ENV=development` and `ENABLE_DEV_EXTRACTION=true`, then
 restart the backend. Open <http://127.0.0.1:5173/inbox>:
 
-- **Inbox:** import the dataset as described above, select `email_004`, and click **Start analysis** to classify the email, extract its attachments, and compare SI/BL fields.
+- **Inbox:** import the dataset as described above, select `email_004`, create a working copy, and run analysis to classify the email, extract its attachments, and compare SI/BL fields.
 - **Upload document:** use the action in Inbox, then choose `backend/tests/fixtures/extraction/email_160_SI.pdf` to inspect seven fields, page evidence, and the original PDF.
 - **Audit Trail:** open `/audit` from the sidebar for live backend steps, source evidence, selection decisions, review reasons, and failures. Extraction results include a direct link to their audit. Processing continues through navigation and refresh.
 - **Saved history:** reopen runs through Audit Trail, choose **View extraction results**, or download the full audit JSON. History survives backend restarts in `backend/.local/extraction-audit.sqlite3` (override with `DEV_AUDIT_DB`). New mailbox analysis runs also appear in this audit history.
@@ -229,13 +230,16 @@ Attachment buttons and **Open original** now open an in-page preview: original T
 | `GET /api/v1/samples` | `q`, `category`, `status`, `page`, `limit` (default 50, maximum 100); returns `items`, filtered `total`, and global `summary` |
 | `GET /api/v1/samples/{id}` | Original email, current documents, latest attempt, last successful result, and run summaries |
 | `GET /api/v1/samples/{id}/documents/{document_id}/content` | Original registered source, checked against its content hash |
-| `POST /api/v1/dev/samples/{id}/analyze` | JSON `{"expected_revision":1}`; synchronous by default; `?wait=false` returns 202 with the saved mailbox detail and `latest_run.audit_run_id`; 409 for an active run or stale revision, 503 when busy |
+| `GET /api/v1/records/{id}` | Unified sample/task read route; responses include explicit `record_kind` |
+| `GET /api/v1/records/{id}/documents/{document_id}/content` | Unified immutable source route used without inferring kind from an ID prefix |
+| `POST /api/v1/dev/samples/{id}/analyze` | Always returns 409 `sample_read_only`; create a working copy first |
 
 Local task endpoints (development only):
 
 | Endpoint | Behavior |
 |---|---|
 | `POST /api/v1/dev/tasks` | `{ "sample_id": "email_004" }`; creates a working copy with no copied analysis |
+| `POST /api/v1/dev/tasks/custom` | Required `subject` (1–500), `sender` (1–320), and `body` (1–50,000); creates an empty revision-one task |
 | `GET /api/v1/dev/tasks` | Paginated local task list (`page`, `limit`) |
 | `GET /api/v1/dev/tasks/{id}` | Current task, active attachments, pair IDs, runs, and saved results |
 | `POST /api/v1/dev/tasks/{id}/documents` | Multipart `file`, `role` (`si`/`bl`), `expected_revision`; saves an immutable source and advances revision |
@@ -248,13 +252,41 @@ Local task endpoints (development only):
 
 The UI requests analysis after a successful source/pair write. A write response alone does not claim an analysis succeeded. Stale writes return 409. `development_tasks` in health advertises availability independently of the optional standalone extraction UI.
 
+## Frozen local evaluation
+
+From `backend/`, run:
+
+```sh
+uv run --frozen python scripts/evaluate_local.py
+```
+
+The tracked manifest covers all five categories, TXT/DOCX/XLSX/PDF, all seven fields, and a case-sensitive quote mismatch. Gitignored JSON, CSV, and Markdown artifacts are written under `.local/evaluation/`. They report the confusion matrix, per-class precision/recall/F1, extraction accuracy, value-state breakdown, evidence quote validity, and AI-call telemetry. The deterministic frozen run does not call Gemini and reports cost as unavailable. After a real smoke test, pass an ignored JSON array of provider metadata with `--provider-records .local/evaluation/provider-smoke.json` to include actual call count, latency, response/model IDs, and token usage without putting those records into Git. Evaluation ground truth is never loaded by runtime routes.
+
+After the final demo scenarios pass, stop the backend and create a content-hashed store archive:
+
+```sh
+uv run --frozen python scripts/demo_store.py create \
+  --mailbox-dir .local --audit-db .local/extraction-audit.sqlite3 \
+  --archive .local/demo-freeze.zip
+uv run --frozen python scripts/demo_store.py verify --archive .local/demo-freeze.zip
+```
+
+Restoration always targets a new directory and refuses to overwrite existing data:
+
+```sh
+uv run --frozen python scripts/demo_store.py restore \
+  --archive .local/demo-freeze.zip --target .local/demo-restored
+```
+
+Point `LOCAL_DATA_DIR` at `.local/demo-restored/mailbox` and `DEV_AUDIT_DB` at `.local/demo-restored/audit.sqlite3`. Restoring again requires another empty target, so the original demo store cannot be destroyed accidentally.
+
 Interactive API documentation is at `/docs`. Local mailbox routes are registered **only when `APP_ENV=development`**. Other environments retain health but do not expose this unauthenticated local store. The PRD's public upload/save/read deployment gate remains outstanding.
 
 The backend loads `backend/.env`; process variables take precedence. `LOCAL_DATA_DIR` defaults to the backend's `.local` directory. Relative configured paths are resolved from the backend directory. `ALLOWED_ORIGINS` is a JSON array of permitted frontend origins; GET and JSON POST are supported. Reanalysis also rejects an unlisted browser Origin.
 
 Vite proxies `/api` to `http://127.0.0.1:8000` by default. `API_PROXY_TARGET` changes the development proxy. Leave `VITE_API_BASE_URL` empty for same-origin requests, or set an API origin without `/api` for a separately hosted frontend. Restart Vite after environment changes. Never place provider keys in `VITE_` variables.
 
-Gemini settings are optional and server-only. Set both `GEMINI_API_KEY` and an explicit `GEMINI_MODEL`; there is no silent model default or upgrade. `GEMINI_TIMEOUT_SECONDS` defaults to 30 and the SDK is configured for one attempt. Missing configuration, timeout, quota, access, provider, and schema failures are saved under stable `AI_*` codes. Supabase and demo-session settings remain unused, and no service is deployed.
+Gemini settings are optional and server-only. Set both `GEMINI_API_KEY` and an explicit `GEMINI_MODEL`; there is no silent model default or upgrade. `GEMINI_TIMEOUT_SECONDS` defaults to 30, `GEMINI_TEXT_MAX_CHARS` defaults to 100,000, and the SDK is configured for one attempt. Missing configuration, input-limit, timeout, quota, access, provider, quote-verification, and schema failures are saved under stable `AI_*` codes. Supabase and demo-session settings remain unused, and no service is deployed.
 
 ## Mailbox processing limits and interpretation
 

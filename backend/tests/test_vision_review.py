@@ -192,14 +192,15 @@ def scan_client(tmp_path):
     )
     Store(settings.local_data_dir).import_dataset(source)
     fake = FakeVisionProvider(si, bl)
-    with TestClient(create_app(settings, vision_provider=fake)) as client:
+    application = create_app(settings, vision_provider=fake)
+    with TestClient(application) as client:
+        baseline = application.state.mailbox_store.analyze("email_512", 1)
+        assert baseline["current_run"] is not None
         yield client, settings, fake
 
 
 def test_visual_candidates_review_overlay_refresh_and_stale_protection(scan_client):
     client, settings, fake = scan_client
-    baseline = client.post("/api/v1/dev/samples/email_512/analyze", json={"expected_revision": 1})
-    assert baseline.status_code == 200, baseline.text
     task = client.post(PREFIX, json={"sample_id": "email_512"}).json()
     analyzed = client.post(
         f"{PREFIX}/{task['id']}/analyze", json={"expected_revision": task["revision"]}
@@ -237,7 +238,7 @@ def test_visual_candidates_review_overlay_refresh_and_stale_protection(scan_clie
                 "field": field,
                 "action": "CORRECT_EXTRACTION" if correction else "CONFIRM_CANDIDATE",
                 "raw_value": VALUES[field] if correction else None,
-                "evidence": {"page": 1},
+                "evidence": {"kind": "visual_page", "page": 1},
             }
             saved = client.post(f"{PREFIX}/{task['id']}/reviews", json=payload)
             assert saved.status_code == 200, saved.text
@@ -271,7 +272,7 @@ def test_visual_candidates_review_overlay_refresh_and_stale_protection(scan_clie
             "document_id": documents["si"],
             "field": "shipper",
             "action": "CONFIRM_CANDIDATE",
-            "evidence": {"page": 1},
+            "evidence": {"kind": "visual_page", "page": 1},
         },
     )
     assert stale.status_code == 409
@@ -287,7 +288,7 @@ def test_visual_candidates_review_overlay_refresh_and_stale_protection(scan_clie
                 **invalid,
                 "field": "shipper",
                 "action": "CONFIRM_CANDIDATE",
-                "evidence": {"page": 1},
+                "evidence": {"kind": "visual_page", "page": 1},
             },
         )
         assert rejected.status_code == 409
@@ -301,7 +302,7 @@ def test_visual_candidates_review_overlay_refresh_and_stale_protection(scan_clie
             "field": "gross_weight_kg",
             "action": "CORRECT_EXTRACTION",
             "raw_value": VALUES["gross_weight_kg"],
-            "evidence": {"page": 1},
+            "evidence": {"kind": "visual_page", "page": 1},
         },
     )
     assert repeated.status_code == 200

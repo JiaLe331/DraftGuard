@@ -19,9 +19,11 @@ def apply_review_overlay(machine_result: dict, actions: list[dict]) -> tuple[dic
             if action and action["action"] == "SUPPLY_INFORMATION":
                 extraction["supplied_information"] = action
                 supplied += 1
-            if extraction.get("method") != "gemini_vision":
-                continue
-            total += 1
+            mandatory = extraction.get("requires_human_confirmation", False) and extraction.get(
+                "method"
+            ) in {"gemini_vision", "gemini_text"}
+            if mandatory:
+                total += 1
             if not action:
                 continue
             effective = deepcopy(extraction)
@@ -30,17 +32,18 @@ def apply_review_overlay(machine_result: dict, actions: list[dict]) -> tuple[dic
                     (
                         item
                         for item in document.get("units", [])
-                        if item.get("page") == action["page"]
+                        if item.get("id") == action["unit_id"]
                     ),
                     None,
                 )
+                visual = extraction.get("method") == "gemini_vision"
                 effective.update(
                     raw_value=action["raw_value"],
                     normalized_value=action["normalized_value"],
                     value_state="PRESENT",
                     method="human",
                     requires_human_confirmation=False,
-                    reason="human_visual_correction",
+                    reason="human_visual_correction" if visual else "human_text_correction",
                     evidence=[
                         {
                             **({k: v for k, v in unit.items() if k != "text"} if unit else {}),
@@ -49,13 +52,14 @@ def apply_review_overlay(machine_result: dict, actions: list[dict]) -> tuple[dic
                             "document_id": action["document_id"],
                             "page": action["page"],
                             "excerpt": action["raw_value"],
-                            "verified": False,
-                            "verification_source": "human_visual",
+                            "verified": not visual,
+                            "verification_source": "human_visual" if visual else "source_text",
                         }
                     ],
                 )
-                corrected += 1
-            elif action["action"] == "CONFIRM_CANDIDATE":
+                if mandatory:
+                    corrected += 1
+            elif action["action"] == "CONFIRM_CANDIDATE" and mandatory:
                 effective.update(
                     requires_human_confirmation=False,
                     reason="human_confirmed_visual_candidate",
@@ -70,7 +74,11 @@ def apply_review_overlay(machine_result: dict, actions: list[dict]) -> tuple[dic
             effective["review"] = action
             field[role] = effective
 
-    if total == 0:
+    value_actions = any(
+        action.get("action") in {"CONFIRM_CANDIDATE", "CORRECT_EXTRACTION"}
+        for action in latest.values()
+    )
+    if total == 0 and not value_actions:
         return reviewed, {
             "total": 0,
             "reviewed": 0,
@@ -110,6 +118,8 @@ def apply_review_overlay(machine_result: dict, actions: list[dict]) -> tuple[dic
     requirements = []
     for item in machine_result.get("review_requirements", []):
         key = (item.get("document_id"), item.get("field"))
+        if latest.get(key, {}).get("action") == "CORRECT_EXTRACTION":
+            continue
         if item.get("code") in {"AI_CONFIRMATION_REQUIRED", "AI_CANDIDATE_MISSING"}:
             if key not in pending_keys:
                 continue

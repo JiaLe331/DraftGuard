@@ -227,7 +227,7 @@ class TaskStoreMixin:
         field,
         action,
         raw_value,
-        page,
+        evidence,
         provenance=None,
     ):
         from app.store import StoreError, now
@@ -273,19 +273,50 @@ class TaskStoreMixin:
             machine = machine_field[document["role"]] if machine_field else None
             if not machine:
                 raise StoreError("invalid_review", "The selected field is unavailable.", 422)
-            if action != "SUPPLY_INFORMATION" and machine.get("method") != "gemini_vision":
-                raise StoreError(
-                    "invalid_review", "Only Gemini visual candidates can be reviewed here.", 422
-                )
             unit = None
-            if action != "SUPPLY_INFORMATION":
+            page = None
+            if action == "CONFIRM_CANDIDATE":
+                if machine.get("method") != "gemini_vision":
+                    raise StoreError(
+                        "invalid_review", "Only Gemini visual candidates can be confirmed.", 422
+                    )
+                if not evidence or evidence.get("kind") != "visual_page":
+                    raise StoreError("invalid_review", "Choose the candidate PDF page.", 422)
+                page = evidence.get("page")
                 unit = next(
                     (item for item in document.get("units", []) if item.get("page") == page), None
                 )
-                if unit is None:
-                    raise StoreError(
-                        "invalid_review", "Choose a page that exists in the current PDF.", 422
+            elif action == "CORRECT_EXTRACTION":
+                if machine.get("method") == "gemini_vision":
+                    if not evidence or evidence.get("kind") != "visual_page":
+                        raise StoreError(
+                            "invalid_review", "Choose a page that exists in the current PDF.", 422
+                        )
+                    page = evidence.get("page")
+                    unit = next(
+                        (item for item in document.get("units", []) if item.get("page") == page),
+                        None,
                     )
+                else:
+                    if not evidence or evidence.get("kind") != "source_unit":
+                        raise StoreError(
+                            "invalid_review",
+                            "Choose extracted source text for this correction.",
+                            422,
+                        )
+                    unit = next(
+                        (
+                            item
+                            for item in document.get("units", [])
+                            if item.get("id") == evidence.get("unit_id")
+                        ),
+                        None,
+                    )
+                    page = unit.get("page") if unit else None
+            if action != "SUPPLY_INFORMATION" and unit is None:
+                raise StoreError(
+                    "invalid_review", "Choose evidence from the current source document.", 422
+                )
             if action == "SUPPLY_INFORMATION":
                 if machine.get("value_state") not in {"MISSING", "AMBIGUOUS", "UNREADABLE"}:
                     raise StoreError(
@@ -337,6 +368,15 @@ class TaskStoreMixin:
                         "The correction is still ambiguous. Include an explicit, supported value.",
                         422,
                     )
+                if machine.get("method") != "gemini_vision":
+                    visible_source = " ".join(unit["text"].split())
+                    visible_value = " ".join(saved_raw.split())
+                    if visible_value not in visible_source:
+                        raise StoreError(
+                            "invalid_review",
+                            "The corrected value must appear in the selected source text.",
+                            422,
+                        )
             review_id = str(uuid4())
             db.execute(
                 "INSERT INTO review_events "

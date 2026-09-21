@@ -1,7 +1,7 @@
 """Development-only local working copies; no session ownership or public access claim."""
 
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
@@ -28,9 +28,19 @@ class SelectPair(AnalyzeTask):
     bl_id: str | None
 
 
-class ReviewEvidence(BaseModel):
+class VisualPageEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    kind: Literal["visual_page"]
     page: int = Field(ge=1)
+
+
+class SourceUnitEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["source_unit"]
+    unit_id: str = Field(min_length=1, max_length=200)
+
+
+ReviewEvidence = Annotated[VisualPageEvidence | SourceUnitEvidence, Field(discriminator="kind")]
 
 
 class ReviewProvenance(BaseModel):
@@ -197,7 +207,7 @@ def build_task_router(settings, store):
                 payload.field,
                 payload.action,
                 payload.raw_value,
-                payload.evidence.page if payload.evidence else None,
+                payload.evidence.model_dump() if payload.evidence else None,
                 payload.provenance.model_dump() if payload.provenance else None,
             )
         )

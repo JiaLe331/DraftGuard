@@ -1,6 +1,7 @@
-import { Navigate, createBrowserRouter, RouterProvider } from 'react-router'
+import { createBrowserRouter, RouterProvider } from 'react-router'
 import { MailboxProvider } from './mailbox/provider'
 import { Shell } from './components/Shell'
+import { Landing } from './pages/Landing'
 import { Overview } from './pages/Overview'
 import { lazy, Suspense } from 'react'
 const Workspace = lazy(() =>
@@ -16,6 +17,10 @@ const Audit = lazy(() => import('./pages/Audit').then((module) => ({ default: mo
 
 const router = createBrowserRouter([
   {
+    path: '/',
+    element: <Landing />,
+  },
+  {
     element: <Shell />,
     errorElement: (
       <div className="page">
@@ -27,7 +32,6 @@ const router = createBrowserRouter([
       </div>
     ),
     children: [
-      { path: '/', element: <Navigate to="/overview" replace /> },
       { path: '/overview', element: <Overview /> },
       { path: '/inbox', element: <Overview inbox /> },
       ...['/audit', '/audit/runs/:runId'].map((path) => ({

@@ -1,11 +1,8 @@
 """Gemini PDF vision adapter and deterministic candidate adaptation."""
 
-import json
 from collections.abc import Callable
-from time import perf_counter
 from typing import Literal
 
-from google import genai
 from google.genai import types
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -22,16 +19,12 @@ from app.extraction.models import (
 )
 from app.extraction.rules import normalize_review_value
 
+from .common import AIProviderError, GeminiProvider
+
 PROMPT_VERSION = "scan-seven-fields-v1"
 
 
-class VisionProviderError(Exception):
-    def __init__(self, code: str, message: str, *, retryable: bool, status: int = 502):
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.retryable = retryable
-        self.status = status
+VisionProviderError = AIProviderError
 
 
 class VisionCandidate(BaseModel):
@@ -78,7 +71,7 @@ class VisionResult(BaseModel):
     metadata: ProviderMetadata
 
 
-class GeminiVisionProvider:
+class GeminiVisionProvider(GeminiProvider):
     """One request per immutable PDF. Construction never calls the provider."""
 
     def __init__(
@@ -86,11 +79,9 @@ class GeminiVisionProvider:
         settings: Settings,
         client_factory: Callable[..., object] | None = None,
     ):
-        key = settings.gemini_api_key.get_secret_value() if settings.gemini_api_key else ""
-        self.api_key = key.strip() or None
-        self.model = settings.gemini_model.strip() if settings.gemini_model else None
-        self.timeout_seconds = settings.gemini_timeout_seconds
-        self.client_factory = client_factory or genai.Client
+        super().__init__(settings, client_factory)
+
+    operation_label = "visual extraction"
 
     def extract_pdf(
         self,
@@ -99,62 +90,16 @@ class GeminiVisionProvider:
         *,
         timeout_seconds: float | None = None,
     ) -> VisionResult:
-        if not self.api_key or not self.model:
-            raise VisionProviderError(
-                "AI_NOT_CONFIGURED",
-                "Gemini visual extraction is not configured. Set GEMINI_API_KEY and "
-                "GEMINI_MODEL on the backend, restart it, and retry.",
-                retryable=False,
-                status=503,
-            )
-        timeout = min(timeout_seconds or self.timeout_seconds, self.timeout_seconds)
-        started = perf_counter()
-        client = None
-        try:
-            client = self.client_factory(api_key=self.api_key)
-            response = client.models.generate_content(
-                model=self.model,
-                contents=[
-                    self._prompt(expected_role),
-                    types.Part.from_bytes(data=content, mime_type="application/pdf"),
-                ],
-                config=types.GenerateContentConfig(
-                    temperature=0,
-                    candidate_count=1,
-                    response_mime_type="application/json",
-                    # Gemini's structured-output subset rejects Pydantic's
-                    # `additionalProperties: false`. Send the same bounded shape
-                    # without that unsupported keyword, then validate the raw
-                    # response against the strict model below.
-                    response_schema=self._provider_schema(),
-                    http_options=types.HttpOptions(
-                        timeout=max(1, round(timeout * 1000)),
-                        retry_options=types.HttpRetryOptions(attempts=1),
-                    ),
-                ),
-            )
-            payload = VisionResponse.model_validate_json(response.text)
-            usage = getattr(response, "usage_metadata", None)
-            metadata = ProviderMetadata(
-                configured_model=self.model,
-                model_version=getattr(response, "model_version", None),
-                response_id=getattr(response, "response_id", None),
-                prompt_version=PROMPT_VERSION,
-                duration_ms=round((perf_counter() - started) * 1000, 3),
-                usage=self._usage(usage),
-            )
-            return VisionResult(response=payload, metadata=metadata)
-        except VisionProviderError:
-            raise
-        except Exception as exc:
-            raise self._provider_error(exc) from exc
-        finally:
-            close = getattr(client, "close", None) if client is not None else None
-            if callable(close):
-                try:
-                    close()
-                except Exception:
-                    pass
+        payload, metadata = self._generate(
+            [
+                self._prompt(expected_role),
+                types.Part.from_bytes(data=content, mime_type="application/pdf"),
+            ],
+            VisionResponse,
+            PROMPT_VERSION,
+            timeout_seconds=timeout_seconds,
+        )
+        return VisionResult(response=payload, metadata=metadata)
 
     @staticmethod
     def _prompt(expected_role: Role | None) -> str:
@@ -171,80 +116,12 @@ class GeminiVisionProvider:
 
     @staticmethod
     def _provider_schema() -> dict:
-        def compatible(value):
-            if isinstance(value, dict):
-                return {
-                    key: compatible(item)
-                    for key, item in value.items()
-                    if key != "additionalProperties"
-                }
-            if isinstance(value, list):
-                return [compatible(item) for item in value]
-            return value
+        return GeminiProvider.provider_schema(VisionResponse)
 
-        return compatible(VisionResponse.model_json_schema())
+    _usage = staticmethod(GeminiProvider.usage)
 
-    @staticmethod
-    def _usage(usage) -> dict[str, int | None] | None:
-        if usage is None:
-            return None
-        if hasattr(usage, "model_dump"):
-            values = usage.model_dump(exclude_none=True)
-        elif isinstance(usage, dict):
-            values = usage
-        else:
-            return None
-        allowed = {
-            "prompt_token_count",
-            "candidates_token_count",
-            "total_token_count",
-            "cached_content_token_count",
-            "thoughts_token_count",
-        }
-        return {key: values.get(key) for key in allowed if key in values} or None
-
-    @staticmethod
-    def _provider_error(exc: Exception) -> VisionProviderError:
-        code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
-        try:
-            code = int(code)
-        except (TypeError, ValueError):
-            pass
-        name = type(exc).__name__.lower()
-        if code == 429:
-            return VisionProviderError(
-                "AI_RATE_LIMITED",
-                "Gemini is rate limited or out of quota. Check quota and retry later.",
-                retryable=True,
-                status=429,
-            )
-        if code in {401, 403}:
-            return VisionProviderError(
-                "AI_ACCESS_DENIED",
-                "Gemini rejected the configured credentials or model access.",
-                retryable=False,
-                status=502,
-            )
-        if "timeout" in name or isinstance(exc, TimeoutError):
-            return VisionProviderError(
-                "AI_TIMEOUT",
-                "Gemini visual extraction timed out. Retry the analysis.",
-                retryable=True,
-                status=504,
-            )
-        if isinstance(exc, (ValueError, TypeError, json.JSONDecodeError)):
-            return VisionProviderError(
-                "AI_INVALID_RESPONSE",
-                "Gemini returned an invalid structured response. Retry the analysis.",
-                retryable=True,
-                status=502,
-            )
-        return VisionProviderError(
-            "AI_PROVIDER_ERROR",
-            "Gemini visual extraction failed. Check provider availability and retry.",
-            retryable=True,
-            status=502,
-        )
+    def _provider_error(self, exc: Exception) -> VisionProviderError:
+        return self.provider_error(exc)
 
 
 def apply_visual_candidates(

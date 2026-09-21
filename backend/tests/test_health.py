@@ -1,3 +1,6 @@
+import shutil
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from app.config import Settings
@@ -53,3 +56,20 @@ def test_production_health_does_not_advertise_local_task_capability(tmp_path):
         response = client.get("/api/health")
     assert response.status_code == 200
     assert response.json()["capabilities"]["development_tasks"] is False
+
+
+def test_settings_construct_where_the_package_sits_near_the_filesystem_root(tmp_path):
+    """The deployed image installs the package at /srv/app, two levels from the
+    root. Defaults that reach for a grandparent directory must not raise while
+    the settings class is still being defined, or the service cannot start."""
+    import importlib.util
+
+    shallow = tmp_path / "app"
+    shutil.copytree(Path(__file__).resolve().parents[1] / "app", shallow)
+    spec = importlib.util.spec_from_file_location("shallow_config", shallow / "config.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    settings = module.Settings(_env_file=None)
+    assert settings.dataset_dir.name == "sdoc-hackathon-bundle"
+    assert settings.local_data_dir.is_absolute()

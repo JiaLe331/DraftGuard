@@ -5,6 +5,20 @@ from typing import Annotated
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+
+def _default_dataset_dir() -> Path:
+    """Where the organiser bundle sits when this checkout lives beside it.
+
+    Only the local import tooling reads it. Installed at a shallower path — in
+    a container the package is at /srv/app — there is no such directory above
+    us, and reaching for a parent that does not exist would raise while the
+    settings class is still being defined, before the app can start.
+    """
+    here = Path(__file__).resolve()
+    root = here.parents[3] if len(here.parents) > 3 else here.parents[1]
+    return root / "sdoc-hackathon-bundle"
+
+
 # Environments that serve the whole product rather than health alone. "demo" is
 # the deployed judge-facing build: same surface as local development, without
 # claiming to be a hardened production deployment.
@@ -22,7 +36,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
     local_data_dir: Path = Path(__file__).resolve().parents[1] / ".local"
     enable_dev_extraction: bool = False
-    dataset_dir: Path = Path(__file__).resolve().parents[3] / "sdoc-hackathon-bundle"
+    dataset_dir: Path = _default_dataset_dir()
     dev_audit_db: Path = Path(__file__).resolve().parents[1] / ".local/extraction-audit.sqlite3"
     dev_upload_limit: int = Field(default=3 * 1024 * 1024, gt=0)
     dev_request_limit: int = Field(default=4 * 1024 * 1024, gt=0)

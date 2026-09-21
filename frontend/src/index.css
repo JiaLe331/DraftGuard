@@ -1119,6 +1119,37 @@ button {
 .candidate-state.reviewed {
   color: var(--green);
 }
+.candidate-state.supplied {
+  color: #75500d;
+}
+.supplied-information {
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid #e4c98e;
+  border-radius: 9px;
+  background: #fffaf0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.supplied-information dl {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+}
+.supplied-information dl > div {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 10px;
+}
+.supplied-information dt,
+.supplied-information small,
+.supplied-information p {
+  color: #665f52;
+}
+.supplied-information dd {
+  margin: 0;
+  font-weight: 600;
+}
 .evidence-panel {
   scroll-margin-top: 16px;
 }
@@ -1448,6 +1479,13 @@ button {
   font-size: 12px;
   color: #606c7d;
 }
+.optional-label {
+  color: var(--muted);
+  font-weight: 400;
+}
+.supply-actions > .button {
+  width: 100%;
+}
 .checkbox-label {
   display: flex;
   gap: 8px;
@@ -1533,6 +1571,74 @@ button {
   border-radius: 12px;
   display: flex;
   gap: 13px;
+}
+.completion-panel.is-complete {
+  border: 1px solid #bdd6c5;
+  background: #eef8f1;
+}
+.completion-content {
+  min-width: 0;
+  width: 100%;
+}
+.completion-checklist {
+  display: grid;
+  gap: 9px;
+  padding: 0;
+  margin: 15px 0;
+  list-style: none;
+}
+.completion-checklist li {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  padding: 9px 10px;
+  border: 1px solid #d8e1ee;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 70%);
+}
+.completion-checklist li > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+.completion-checklist li.passed > svg {
+  color: var(--green);
+}
+.completion-checklist li.blocked > svg {
+  color: #946313;
+}
+.completion-checklist span,
+.completion-checklist small {
+  display: block;
+}
+.completion-checklist small {
+  margin-top: 2px;
+  color: #606c7d;
+  line-height: 1.45;
+}
+.completion-blocker {
+  padding-left: 10px;
+  border-left: 3px solid #d7a346;
+}
+.completion-panel .button.primary {
+  width: 100%;
+  min-height: 44px;
+  justify-content: center;
+}
+.completion-scope {
+  margin-bottom: 0 !important;
+}
+.completion-dialog-body {
+  padding-top: 5px;
+}
+.completion-dialog-body strong {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.report-review-action {
+  padding: 10px 12px;
+  border-left: 3px solid #6888b2;
+  background: #f6f9fd;
+  break-inside: avoid;
 }
 .completion-icon {
   color: #606c7d;
@@ -2793,6 +2899,8 @@ button {
   border: 0;
   padding: 0;
   margin: 16px 0;
+  width: 100%;
+  min-inline-size: 0;
   display: flex;
   gap: 16px;
   align-items: end;
@@ -2855,6 +2963,14 @@ button {
   .task-sources fieldset {
     flex-direction: column;
     align-items: stretch;
+  }
+  .task-sources fieldset > label,
+  .task-sources fieldset > .button,
+  .task-sources select,
+  .task-sources input {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
   }
   .revision-changes dl {
     grid-template-columns: repeat(2, minmax(0, 1fr));

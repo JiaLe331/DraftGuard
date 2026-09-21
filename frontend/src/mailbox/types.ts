@@ -24,6 +24,7 @@ export const statusLabels = {
   REVIEW_REQUIRED: 'Needs review',
   DISCREPANCIES_FOUND: 'Discrepancies found',
   READY: 'Ready for review',
+  CHECK_COMPLETE: 'Check complete',
   NOT_APPLICABLE: 'Classified',
   MATCH: 'Match',
   MISMATCH: 'Mismatch',
@@ -82,12 +83,15 @@ export interface ReviewAction {
   run_id: string
   document_id: string
   field: FieldKey
-  action: 'CONFIRM_CANDIDATE' | 'CORRECT_EXTRACTION'
+  action: 'CONFIRM_CANDIDATE' | 'CORRECT_EXTRACTION' | 'SUPPLY_INFORMATION'
   machine_raw_value: string | null
   raw_value: string
   normalized_value: string | null
-  page: number
-  unit_id: string
+  page: number | null
+  unit_id: string | null
+  provenance_source?: string | null
+  provenance_reference?: string | null
+  provenance_note?: string | null
   actor: string
   created_at: string
 }
@@ -100,6 +104,7 @@ export interface Extraction {
   reason: string
   evidence: Evidence[]
   review?: ReviewAction
+  supplied_information?: ReviewAction
 }
 export interface FieldResult {
   key: FieldKey
@@ -177,7 +182,20 @@ export interface Run extends RunSummary {
     reviewed: number
     confirmed: number
     corrected: number
+    supplied?: number
     pending: number
+  }
+  completion?: {
+    id: string
+    task_id: string
+    revision: number
+    run_id: string
+    actor: string
+    acknowledged_at: string
+  } | null
+  completion_eligibility?: {
+    eligible: boolean
+    blockers: Array<{ code: string; message: string }>
   }
   error: Problem | null
   document_ids: string[]
@@ -204,6 +222,7 @@ export function taskAction(sample: Sample) {
   if (!sample.category) return 'Review classification'
   if (sample.category !== 'BL_COMPARISON') return 'Read email'
   if (sample.workflow_state === 'WAITING_DOCUMENT') return 'View missing documents'
+  if (sample.workflow_state === 'CHECK_COMPLETE') return 'View completed check'
   if (sample.known_defect_fields.length) return 'Review differences'
   return 'Inspect results'
 }

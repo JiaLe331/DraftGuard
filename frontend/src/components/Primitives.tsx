@@ -14,7 +14,7 @@ export function StatusBadge({ status }: { status: Workflow | Finding }) {
       ? 'danger'
       : status === 'REVIEW_REQUIRED' || status === 'NEEDS_REVIEW'
         ? 'warning'
-        : status === 'MATCH'
+        : status === 'MATCH' || status === 'CHECK_COMPLETE'
           ? 'success'
           : status === 'READY'
             ? 'blue'

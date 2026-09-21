@@ -1,5 +1,5 @@
 import { AnalysisActivity } from '../components/AnalysisActivity'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useLocation, useParams, useSearchParams } from 'react-router'
 import {
   ArrowLeftIcon,
@@ -10,8 +10,11 @@ import {
   EnvelopeSimpleIcon,
   PencilSimpleIcon,
   SparkleIcon,
+  InfoIcon,
+  ShieldCheckIcon,
+  WarningCircleIcon,
 } from '@phosphor-icons/react'
-import { request, taskPath, useResource } from '../mailbox/api'
+import { ApiError, request, taskPath, useResource } from '../mailbox/api'
 import { useMailbox } from '../mailbox/context'
 import { useAnalysis } from '../mailbox/useAnalysis'
 import {
@@ -25,7 +28,7 @@ import {
   type DocumentVersion,
 } from '../mailbox/types'
 import type { Health } from '../extraction/api'
-import { EmptyState, StatusBadge } from '../components/Primitives'
+import { Dialog, EmptyState, StatusBadge } from '../components/Primitives'
 import { Report } from '../components/Report'
 import { CloneTask, TaskSources, RevisionChanges } from '../components/TaskSources'
 import { DocumentPreview } from '../components/DocumentPreview'
@@ -484,6 +487,11 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
                         machine={machineResult?.fields.find((item) => item.key === f.key)?.[side]}
                         effective={f[side]}
                       />
+                      {f[side].supplied_information && (
+                        <span className="candidate-state supplied">
+                          <InfoIcon size={14} aria-hidden="true" /> Supplied externally · unresolved
+                        </span>
+                      )}
                     </div>
                   ))}
                   <div role="cell">
@@ -586,6 +594,9 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
                     </dl>
                   </div>
                 )}
+                {effectiveExtraction?.supplied_information && (
+                  <SuppliedInformation action={effectiveExtraction.supplied_information} />
+                )}
                 {fieldEvidence.length > 0 && (
                   <div className="evidence-excerpts">
                     {fieldEvidence.map((e) => (
@@ -674,6 +685,24 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
                 }}
               />
             )}
+            {field &&
+              document &&
+              machineExtraction &&
+              ['MISSING', 'AMBIGUOUS', 'UNREADABLE'].includes(machineExtraction.value_state) && (
+                <SupplyControls
+                  key={`supply:${document.id}:${field.key}`}
+                  task={task}
+                  field={field.key}
+                  document={document}
+                  effective={effectiveExtraction ?? machineExtraction}
+                  historical={historical}
+                  onRefresh={reload}
+                  onSaved={(next) => {
+                    replaceTask(next)
+                    refresh()
+                  }}
+                />
+              )}
           </section>
         </div>
       )}
@@ -752,11 +781,18 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
                     <span className="history-dot" />
                     <div>
                       <strong>
-                        {action.action === 'CORRECT_EXTRACTION' ? 'Corrected' : 'Confirmed'} ·{' '}
-                        {fieldLabels[action.field]}
+                        {action.action === 'CORRECT_EXTRACTION'
+                          ? 'Corrected'
+                          : action.action === 'SUPPLY_INFORMATION'
+                            ? 'Supplied information'
+                            : 'Confirmed'}{' '}
+                        · {fieldLabels[action.field]}
                       </strong>
                       <p>
-                        Page {action.page} · {action.actor}
+                        {action.page
+                          ? `Page ${action.page}`
+                          : `${action.provenance_source} · ${action.provenance_reference}`}{' '}
+                        · {action.actor}
                       </p>
                       <small>{analyzedAt(action.created_at)}</small>
                     </div>
@@ -766,15 +802,17 @@ function TaskWorkspace({ task: initial, reload }: { task: SampleDetail; reload: 
             </details>
           )}
         </section>
-        <aside className="completion-panel">
-          <div>
-            <h3>Source-backed review stays visible.</h3>
-            <p>
-              AI candidates require a page-level confirmation or correction. Review actions are
-              retained locally, but this stage never records final completion.
-            </p>
-          </div>
-        </aside>
+        {localTask && (
+          <CompletionPanel
+            task={task}
+            historical={historical}
+            onRefresh={reload}
+            onSaved={(next) => {
+              replaceTask(next)
+              refresh()
+            }}
+          />
+        )}
       </div>
       <p className="workspace-disclaimer">
         {localTask ? 'Local working copy' : 'Demo mailbox · Provided dataset'}. This seven-field
@@ -803,6 +841,340 @@ function CandidateState({ machine, effective }: { machine?: Extraction; effectiv
     <span className="candidate-state pending">
       <SparkleIcon size={14} aria-hidden="true" /> AI candidate · Confirmation required
     </span>
+  )
+}
+
+function SuppliedInformation({
+  action,
+}: {
+  action: NonNullable<Extraction['supplied_information']>
+}) {
+  const reference = action.provenance_reference ?? ''
+  const safeUrl = /^https:\/\/[^\s]+$/i.test(reference)
+  return (
+    <div className="supplied-information">
+      <div className="eyebrow">EXTERNAL INFORMATION · UNVERIFIED</div>
+      <dl>
+        <div>
+          <dt>Supplied value</dt>
+          <dd>{action.raw_value}</dd>
+        </div>
+        <div>
+          <dt>Source</dt>
+          <dd>{action.provenance_source}</dd>
+        </div>
+        <div>
+          <dt>Reference</dt>
+          <dd>
+            {safeUrl ? (
+              <a href={reference} target="_blank" rel="noreferrer">
+                {reference}
+              </a>
+            ) : (
+              reference
+            )}
+          </dd>
+        </div>
+      </dl>
+      {action.provenance_note && <p>{action.provenance_note}</p>}
+      <small>Recorded for handover; this does not resolve the source value.</small>
+    </div>
+  )
+}
+
+function SupplyControls({
+  task,
+  field,
+  document,
+  effective,
+  historical,
+  onRefresh,
+  onSaved,
+}: {
+  task: SampleDetail
+  field: FieldKey
+  document: DocumentVersion
+  effective: Extraction
+  historical: boolean
+  onRefresh: () => void
+  onSaved: (task: SampleDetail) => void
+}) {
+  const existing = effective.supplied_information
+  const [editing, setEditing] = useState(false)
+  const [rawValue, setRawValue] = useState(existing?.raw_value ?? '')
+  const [sourceName, setSourceName] = useState(existing?.provenance_source ?? '')
+  const [reference, setReference] = useState(existing?.provenance_reference ?? '')
+  const [note, setNote] = useState(existing?.provenance_note ?? '')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [saved, setSaved] = useState('')
+
+  if (historical || task.current_run?.completion) return null
+
+  async function save(event: FormEvent) {
+    event.preventDefault()
+    const runId = task.current_run?.id
+    if (!runId || busy) return
+    setBusy(true)
+    setError('')
+    setSaved('')
+    try {
+      const next = await request<SampleDetail>(`${taskPath(task.id)}/reviews`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          expected_revision: task.revision,
+          run_id: runId,
+          document_id: document.id,
+          field,
+          action: 'SUPPLY_INFORMATION',
+          raw_value: rawValue,
+          provenance: { source_name: sourceName, reference, note: note.trim() || undefined },
+        }),
+      })
+      onSaved(next)
+      setEditing(false)
+      setSaved('Supplied information recorded. The source value remains unresolved.')
+    } catch (failure) {
+      setError((failure as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="evidence-actions supply-actions">
+      <button
+        className="button"
+        aria-expanded={editing}
+        onClick={() => {
+          setEditing((value) => !value)
+          setError('')
+        }}
+      >
+        <InfoIcon size={16} aria-hidden="true" />
+        {existing ? 'Update supplied information' : 'Supply information'}
+      </button>
+      <p className="candidate-help">
+        Recorded for handover; does not resolve this field or permit completion.
+      </p>
+      {editing && (
+        <form className="review-editor" onSubmit={(event) => void save(event)}>
+          <div className="editor-heading">
+            <div>
+              <div className="eyebrow">EXTERNAL INFORMATION</div>
+              <h3>Record supplied information</h3>
+            </div>
+          </div>
+          <label className="form-field">
+            Supplied value
+            <textarea
+              required
+              rows={3}
+              maxLength={5000}
+              value={rawValue}
+              onChange={(event) => setRawValue(event.target.value)}
+            />
+          </label>
+          <label className="form-field">
+            Source name
+            <input
+              required
+              maxLength={200}
+              value={sourceName}
+              onChange={(event) => setSourceName(event.target.value)}
+            />
+          </label>
+          <label className="form-field">
+            Checkable reference or HTTPS URL
+            <input
+              required
+              maxLength={1000}
+              value={reference}
+              onChange={(event) => setReference(event.target.value)}
+            />
+          </label>
+          <label className="form-field">
+            Note <span className="optional-label">Optional</span>
+            <textarea
+              rows={2}
+              maxLength={2000}
+              value={note}
+              onChange={(event) => setNote(event.target.value)}
+            />
+          </label>
+          {error && <ReviewError message={error} onRefresh={onRefresh} />}
+          <div className="editor-actions">
+            <button
+              className="button"
+              type="button"
+              disabled={busy}
+              onClick={() => setEditing(false)}
+            >
+              Cancel
+            </button>
+            <button
+              className="button primary"
+              disabled={busy || !rawValue.trim() || !sourceName.trim() || !reference.trim()}
+            >
+              {busy ? 'Recording…' : 'Record for handover'}
+            </button>
+          </div>
+        </form>
+      )}
+      <p className="review-announcement" aria-live="polite">
+        {saved}
+      </p>
+    </div>
+  )
+}
+
+function CompletionPanel({
+  task,
+  historical,
+  onRefresh,
+  onSaved,
+}: {
+  task: SampleDetail
+  historical: boolean
+  onRefresh: () => void
+  onSaved: (task: SampleDetail) => void
+}) {
+  const run = task.current_run
+  const result = run?.reviewed_result ?? run?.result
+  const eligibility = run?.completion_eligibility
+  const completion = run?.completion
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const supplied = run?.review_progress?.supplied ?? 0
+  const checks = [
+    {
+      label: 'Documents',
+      passed: !!task.current_si_id && !!task.current_bl_id && !!run,
+      detail: 'Current SI and draft BL are bound to this run.',
+    },
+    {
+      label: 'Seven fields',
+      passed: result?.coverage.checked === 7,
+      detail: `${result?.coverage.checked ?? 0}/7 checked`,
+    },
+    {
+      label: 'Discrepancies',
+      passed: result?.known_defect_fields.length === 0,
+      detail: `${result?.known_defect_fields.length ?? 0} unresolved`,
+    },
+    {
+      label: 'Pending review',
+      passed: (result?.review_requirements.length ?? 1) === 0,
+      detail: `${result?.review_requirements.length ?? 0} requirements`,
+    },
+    {
+      label: 'External supplied information',
+      passed: supplied === 0,
+      detail: supplied ? `${supplied} requires a replacement source` : 'None',
+    },
+  ]
+
+  async function complete() {
+    if (!run || busy) return
+    setBusy(true)
+    setError('')
+    try {
+      const next = await request<SampleDetail>(`${taskPath(task.id)}/complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          expected_revision: task.revision,
+          run_id: run.id,
+          acknowledge_seven_field_scope: true,
+        }),
+      })
+      setConfirming(false)
+      onSaved(next)
+    } catch (failure) {
+      const apiError = failure as ApiError
+      setError(apiError.blockers?.map((blocker) => blocker.message).join(' ') || apiError.message)
+      setConfirming(false)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <aside className={`completion-panel ${completion ? 'is-complete' : ''}`}>
+      <div className={`completion-icon ${completion ? 'success' : ''}`}>
+        {completion ? <ShieldCheckIcon size={24} /> : <WarningCircleIcon size={24} />}
+      </div>
+      <div className="completion-content">
+        <div className="eyebrow">SEVEN-FIELD CHECK</div>
+        <h3>{completion ? 'Check complete' : 'Completion eligibility'}</h3>
+        {completion ? (
+          <p>
+            {completion.actor} · {analyzedAt(completion.acknowledged_at)}
+            <br />
+            Run {completion.run_id}
+          </p>
+        ) : (
+          <ul className="completion-checklist">
+            {checks.map((check) => (
+              <li key={check.label} className={check.passed ? 'passed' : 'blocked'}>
+                {check.passed ? (
+                  <CheckCircleIcon size={17} aria-hidden="true" />
+                ) : (
+                  <WarningCircleIcon size={17} aria-hidden="true" />
+                )}
+                <span>
+                  <strong>{check.label}</strong>
+                  <small>{check.detail}</small>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {!completion &&
+          eligibility?.blockers.map((blocker) => (
+            <p className="completion-blocker" key={blocker.code}>
+              {blocker.message}
+            </p>
+          ))}
+        {error && <ReviewError message={error} onRefresh={onRefresh} />}
+        {!historical && !completion && (
+          <button
+            className="button primary"
+            disabled={!eligibility?.eligible || busy}
+            onClick={() => setConfirming(true)}
+          >
+            <ShieldCheckIcon size={17} aria-hidden="true" /> Complete seven-field check
+          </button>
+        )}
+        <p className="completion-scope">
+          This is a bounded document comparison, not legal approval or cargo-release authority.
+        </p>
+      </div>
+      {confirming && run && (
+        <Dialog title="Complete seven-field check?" onClose={() => !busy && setConfirming(false)}>
+          <div className="completion-dialog-body">
+            <p>
+              This records an acknowledgment for task <strong>{task.id}</strong>, revision{' '}
+              <strong>{task.revision}</strong>, run <strong>{run.id}</strong>.
+            </p>
+            <p>
+              Actor: <strong>Demo reviewer — unverified</strong>. The acknowledgment covers only the
+              seven fields shown in DraftGuard.
+            </p>
+            <div className="editor-actions">
+              <button className="button" disabled={busy} onClick={() => setConfirming(false)}>
+                Cancel
+              </button>
+              <button className="button primary" disabled={busy} onClick={() => void complete()}>
+                {busy ? 'Completing…' : 'Confirm completion'}
+              </button>
+            </div>
+          </div>
+        </Dialog>
+      )}
+    </aside>
   )
 }
 
@@ -869,6 +1241,13 @@ function ReviewControls({
     return (
       <div className="evidence-actions">
         <p className="notice warning">Historical review actions are read only.</p>
+      </div>
+    )
+
+  if (task.current_run?.completion)
+    return (
+      <div className="evidence-actions">
+        <p className="notice warning">This completed run is read only.</p>
       </div>
     )
 

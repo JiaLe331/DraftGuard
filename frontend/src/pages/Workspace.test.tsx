@@ -279,11 +279,13 @@ describe('dataset mailbox journeys', () => {
     expect(within(evidence).getByRole('heading', { name: 'Consignee' })).toBeInTheDocument()
     expect(within(evidence).getByRole('button', { name: 'Open original · page 1' })).toBeEnabled()
     expect(
-      screen.queryByRole('button', { name: /Complete review|Correct extraction|Save & recheck/ }),
+      screen.queryByRole('button', {
+        name: /Complete review|Complete seven-field check|Correct extraction|Save & recheck/,
+      }),
     ).not.toBeInTheDocument()
     const print = vi.spyOn(window, 'print').mockImplementation(() => {})
     await userEvent.click(screen.getByRole('button', { name: 'Print report' }))
-    expect(screen.getByRole('heading', { name: 'Document analysis report' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Document review report' })).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Print / Save PDF' }))
     expect(print).toHaveBeenCalledOnce()
   })
@@ -488,6 +490,71 @@ function visualTask(): SampleDetail {
   task.latest_run = task.current_run
   return task
 }
+function missingValueTask(): SampleDetail {
+  const task = structuredClone(localTask())
+  const machine = task.current_run!.result!
+  const field = machine.fields[0]
+  field.bl = {
+    ...field.bl,
+    raw_value: null,
+    normalized_value: null,
+    value_state: 'MISSING',
+    reason: 'FIELD_NOT_FOUND',
+    evidence: [],
+  }
+  field.finding = 'NEEDS_REVIEW'
+  machine.coverage = { checked: 6, total: 7 }
+  machine.workflow_state = 'REVIEW_REQUIRED'
+  machine.review_requirements = [
+    {
+      code: 'FIELD_NOT_FOUND',
+      message: 'Shipper was not found in the BL.',
+      document_id: 'bl',
+      field: 'shipper',
+    },
+  ]
+  task.workflow_state = 'REVIEW_REQUIRED'
+  task.coverage = machine.coverage
+  task.current_run!.reviewed_result = structuredClone(machine)
+  task.current_run!.review_actions = []
+  task.current_run!.review_progress = {
+    total: 0,
+    reviewed: 0,
+    confirmed: 0,
+    corrected: 0,
+    supplied: 0,
+    pending: 0,
+  }
+  task.current_run!.completion_eligibility = {
+    eligible: false,
+    blockers: [{ code: 'coverage_incomplete', message: 'Only 6 of 7 fields are checked.' }],
+  }
+  task.latest_run = task.current_run
+  return task
+}
+function readyTask(): SampleDetail {
+  const task = structuredClone(localTask())
+  const machine = task.current_run!.result!
+  for (const field of machine.fields) {
+    field.bl = {
+      ...field.si,
+      evidence: field.bl.evidence,
+    }
+    field.finding = 'MATCH'
+  }
+  machine.known_defect_fields = []
+  machine.review_requirements = []
+  machine.coverage = { checked: 7, total: 7 }
+  machine.workflow_state = 'READY'
+  task.workflow_state = 'READY'
+  task.known_defect_fields = []
+  task.coverage = machine.coverage
+  task.current_run!.reviewed_result = structuredClone(machine)
+  task.current_run!.review_actions = []
+  task.current_run!.completion_eligibility = { eligible: true, blockers: [] }
+  task.latest_run = task.current_run
+  return task
+}
 function taskApi(task = localTask()) {
   return vi.fn(async (url: string, options?: RequestInit) => {
     if (url === '/api/health')
@@ -501,6 +568,128 @@ function taskApi(task = localTask()) {
 }
 
 describe('local task revision journeys', () => {
+  it('records supplied information without resolving the field or enabling completion', async () => {
+    const task = missingValueTask()
+    let submitted: Record<string, unknown> | undefined
+    const fetcher = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url.endsWith('/reviews') && options?.method === 'POST') {
+        submitted = JSON.parse(options.body as string)
+        const next = structuredClone(task)
+        const action = {
+          id: 'review-supply',
+          task_id: next.id,
+          revision: 1,
+          run_id: 'run-1',
+          document_id: 'bl',
+          field: 'shipper' as const,
+          action: 'SUPPLY_INFORMATION' as const,
+          machine_raw_value: null,
+          raw_value: 'SOURCE LTD',
+          normalized_value: 'SOURCE LTD',
+          page: null,
+          unit_id: null,
+          provenance_source: 'Carrier confirmation',
+          provenance_reference: 'Email dated 21 Sep 2026',
+          provenance_note: 'Confirmed by forwarding agent',
+          actor: 'Demo reviewer — unverified',
+          created_at: '2026-09-21T00:00:00Z',
+        }
+        next.current_run!.review_actions = [action]
+        next.current_run!.review_progress!.supplied = 1
+        next.current_run!.reviewed_result!.fields[0].bl.supplied_information = action
+        next.current_run!.completion_eligibility = {
+          eligible: false,
+          blockers: [
+            { code: 'supplied_information', message: 'Replace the source document to continue.' },
+          ],
+        }
+        return json(next)
+      }
+      return taskApi(task)(url, options)
+    })
+    vi.stubGlobal('fetch', fetcher)
+    const user = userEvent.setup()
+    renderRoute('/tasks/task-copy')
+
+    await user.click(await screen.findByRole('button', { name: 'Supply information' }))
+    await user.type(screen.getByLabelText('Supplied value'), 'SOURCE LTD')
+    await user.type(screen.getByLabelText('Source name'), 'Carrier confirmation')
+    await user.type(
+      screen.getByLabelText('Checkable reference or HTTPS URL'),
+      'Email dated 21 Sep 2026',
+    )
+    await user.type(screen.getByLabelText(/Note/), 'Confirmed by forwarding agent')
+    await user.click(screen.getByRole('button', { name: 'Record for handover' }))
+
+    expect(submitted).toEqual({
+      expected_revision: 1,
+      run_id: 'run-1',
+      document_id: 'bl',
+      field: 'shipper',
+      action: 'SUPPLY_INFORMATION',
+      raw_value: 'SOURCE LTD',
+      provenance: {
+        source_name: 'Carrier confirmation',
+        reference: 'Email dated 21 Sep 2026',
+        note: 'Confirmed by forwarding agent',
+      },
+    })
+    expect(await screen.findByText('Supplied externally · unresolved')).toBeInTheDocument()
+    expect(screen.getByText('Replace the source document to continue.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Complete seven-field check' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Print report' }))
+    expect(
+      screen.getByRole('heading', { name: /Supplied information · Shipper/ }),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/Source: Carrier confirmation/)).toBeInTheDocument()
+  })
+
+  it('requires an explicit dialog acknowledgment and persists CHECK_COMPLETE', async () => {
+    const task = readyTask()
+    let submitted: Record<string, unknown> | undefined
+    const fetcher = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url.endsWith('/complete') && options?.method === 'POST') {
+        submitted = JSON.parse(options.body as string)
+        const next = structuredClone(task)
+        next.workflow_state = 'CHECK_COMPLETE'
+        next.current_run!.reviewed_result!.workflow_state = 'CHECK_COMPLETE'
+        next.current_run!.completion = {
+          id: 'completion-1',
+          task_id: next.id,
+          revision: 1,
+          run_id: 'run-1',
+          actor: 'Demo reviewer — unverified',
+          acknowledged_at: '2026-09-21T00:00:00Z',
+        }
+        return json(next)
+      }
+      return taskApi(task)(url, options)
+    })
+    vi.stubGlobal('fetch', fetcher)
+    const user = userEvent.setup()
+    renderRoute('/tasks/task-copy')
+
+    await user.click(await screen.findByRole('button', { name: 'Complete seven-field check' }))
+    const dialog = screen.getByRole('dialog', { name: 'Complete seven-field check?' })
+    expect(within(dialog).getByText(/Demo reviewer — unverified/)).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Confirm completion' }))
+
+    expect(submitted).toEqual({
+      expected_revision: 1,
+      run_id: 'run-1',
+      acknowledge_seven_field_scope: true,
+    })
+    expect(await screen.findByRole('heading', { name: 'Check complete' })).toBeInTheDocument()
+    expect(
+      screen.getAllByText(
+        (_, element) => element?.tagName === 'P' && !!element.textContent?.includes('Run run-1'),
+      ).length,
+    ).toBeGreaterThan(0)
+    expect(
+      screen.queryByRole('button', { name: 'Complete seven-field check' }),
+    ).not.toBeInTheDocument()
+  })
+
   it('shows visual candidates, source review controls, busy state and persisted confirmation', async () => {
     const task = visualTask()
     let release!: () => void

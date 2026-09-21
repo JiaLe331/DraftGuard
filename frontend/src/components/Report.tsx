@@ -2,14 +2,22 @@ import { RevisionChanges } from './TaskSources'
 import { analyzedAt, fieldLabels, statusLabels, type SampleDetail } from '../mailbox/types'
 export function Report({ task, preview = false }: { task: SampleDetail; preview?: boolean }) {
   const run = task.current_run
-  const result = run?.result
-  if (!result || !run) return null
+  const machine = run?.result
+  const result = run?.reviewed_result ?? machine
+  if (!result || !machine || !run) return null
+  const actions = run.review_actions ?? []
+  const completion = run.completion
+  const designation = completion
+    ? 'Completed seven-field check'
+    : actions.length
+      ? 'Human-reviewed result · Not complete'
+      : 'Machine-only result · Not complete'
   return (
     <article className={`print-report ${preview ? 'report-preview' : ''}`}>
       <div className="eyebrow">
         DRAFTGUARD · {task.baseline_id ? 'LOCAL WORKING COPY' : 'PROVIDED DATASET'}
       </div>
-      <h1>Document analysis report</h1>
+      <h1>Document review report</h1>
       {task.is_historical && (
         <p>
           <strong>Historical result · Not the current check</strong>
@@ -28,6 +36,9 @@ export function Report({ task, preview = false }: { task: SampleDetail; preview?
       </p>
       <p>
         Run {run.id} · {statusLabels[result.workflow_state]}
+      </p>
+      <p>
+        <strong>{designation}</strong>
       </p>
       {task.latest_run?.status === 'FAILED' && (
         <p>
@@ -66,11 +77,25 @@ export function Report({ task, preview = false }: { task: SampleDetail; preview?
                 {f.si.raw_value ?? 'Missing'}
                 <br />
                 {f.si.normalized_value ?? 'Not established'}
+                {machine.fields.find((item) => item.key === f.key)?.si.raw_value !==
+                  f.si.raw_value && (
+                  <small>
+                    <br />
+                    Machine: {machine.fields.find((item) => item.key === f.key)?.si.raw_value}
+                  </small>
+                )}
               </td>
               <td>
                 {f.bl.raw_value ?? 'Missing'}
                 <br />
                 {f.bl.normalized_value ?? 'Not established'}
+                {machine.fields.find((item) => item.key === f.key)?.bl.raw_value !==
+                  f.bl.raw_value && (
+                  <small>
+                    <br />
+                    Machine: {machine.fields.find((item) => item.key === f.key)?.bl.raw_value}
+                  </small>
+                )}
               </td>
               <td>{statusLabels[f.finding]}</td>
             </tr>
@@ -102,10 +127,63 @@ export function Report({ task, preview = false }: { task: SampleDetail; preview?
       ))}
       <RevisionChanges task={task} />
       <h2>Human review</h2>
-      <p>
-        Machine-only results. No human corrections or completion acknowledgment have been recorded.
-        Reviewer identity is unverified.
-      </p>
+      {!actions.length && <p>No human review actions have been recorded.</p>}
+      {actions.map((action) => (
+        <section className="report-review-action" key={action.id}>
+          <h3>
+            {action.action === 'CONFIRM_CANDIDATE'
+              ? 'Confirmed candidate'
+              : action.action === 'CORRECT_EXTRACTION'
+                ? 'Corrected extraction'
+                : 'Supplied information'}{' '}
+            · {fieldLabels[action.field]}
+          </h3>
+          <p>
+            Document {action.document_id} · {action.actor} · {analyzedAt(action.created_at)}
+          </p>
+          <p>
+            Machine value: {action.machine_raw_value ?? 'Missing'}
+            <br />
+            Human value: {action.raw_value}
+            {action.page ? (
+              <>
+                <br />
+                Evidence page: {action.page}
+              </>
+            ) : null}
+          </p>
+          {action.action === 'SUPPLY_INFORMATION' && (
+            <p>
+              Source: {action.provenance_source}
+              <br />
+              Reference: {action.provenance_reference}
+              {action.provenance_note ? (
+                <>
+                  <br />
+                  Note: {action.provenance_note}
+                </>
+              ) : null}
+              <br />
+              Unverified external information; replacement source required.
+            </p>
+          )}
+        </section>
+      ))}
+      <h2>Completion acknowledgment</h2>
+      {completion ? (
+        <p>
+          Check complete · {completion.actor} · {analyzedAt(completion.acknowledged_at)}
+          <br />
+          Revision {completion.revision} · Run {completion.run_id}
+        </p>
+      ) : (
+        <>
+          <p>No completion acknowledgment has been recorded. Reviewer identity is unverified.</p>
+          {run.completion_eligibility?.blockers.map((blocker) => (
+            <p key={blocker.code}>Blocked: {blocker.message}</p>
+          ))}
+        </>
+      )}
       <p>
         This report covers seven fields only. It is not legal approval, authorization to release
         cargo, or a complete bill-of-lading review.

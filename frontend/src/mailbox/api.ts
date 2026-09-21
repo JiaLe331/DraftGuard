@@ -3,9 +3,11 @@ import { useCallback, useEffect, useState } from 'react'
 export const apiBase = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
 export class ApiError extends Error {
   status: number
-  constructor(message: string, status = 0) {
+  blockers?: Array<{ code: string; message: string }>
+  constructor(message: string, status = 0, blockers?: Array<{ code: string; message: string }>) {
     super(message)
     this.status = status
+    this.blockers = blockers
   }
 }
 export async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -24,6 +26,7 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
             ? 'The backend is unavailable. Check that it is running, then retry.'
             : `Request failed (${response.status}).`),
         response.status,
+        body?.detail?.blockers,
       )
     }
     return (await response.json()) as T

@@ -1,5 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&display=swap');
-
 :root {
   font-family: 'Manrope', Arial, sans-serif;
   color: #121210;
@@ -2210,7 +2208,7 @@ button {
   .select-wrap select {
     font-size: 13px;
     padding-left: 2px;
-    min-height: 40px;
+    min-height: 44px;
     max-width: 125px;
   }
   .task-table-head {
@@ -2292,7 +2290,7 @@ button {
   }
   .button.compact {
     font-size: 13px;
-    min-height: 40px;
+    min-height: 44px;
     padding: 7px;
   }
   .workspace-breadcrumb > span,
@@ -2336,7 +2334,7 @@ button {
     gap: 5px;
   }
   .version-picker select {
-    min-height: 40px;
+    min-height: 44px;
   }
   .comparison-head {
     display: none;
@@ -3641,7 +3639,7 @@ h3 {
 }
 
 .view-tabs button {
-  min-height: 40px;
+  min-height: 44px;
   border-radius: 999px;
 }
 
@@ -3775,7 +3773,8 @@ h3 {
 }
 
 .button.compact {
-  min-height: 40px;
+  /* 44px is the minimum touch target; the pill styling does not change that. */
+  min-height: 44px;
 }
 
 .text-button {

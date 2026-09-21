@@ -228,15 +228,14 @@ class TaskStoreMixin:
         action,
         raw_value,
         page,
+        provenance=None,
     ):
         from app.store import StoreError, now
 
         if field not in FIELD_KEYS:
             raise StoreError("invalid_review", "Choose one supported comparison field.", 422)
-        if action not in {"CONFIRM_CANDIDATE", "CORRECT_EXTRACTION"}:
-            raise StoreError(
-                "invalid_review", "Choose confirm candidate or correct extraction.", 422
-            )
+        if action not in {"CONFIRM_CANDIDATE", "CORRECT_EXTRACTION", "SUPPLY_INFORMATION"}:
+            raise StoreError("invalid_review", "Choose a supported review action.", 422)
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             task = self._task(db, task_id, expected_revision)
@@ -250,6 +249,12 @@ class TaskStoreMixin:
             ):
                 raise StoreError(
                     "stale_review", "Review the current saved analysis after refreshing.", 409
+                )
+            if self._completion(db, run_id):
+                raise StoreError(
+                    "completed_run_read_only",
+                    "This completed run is read only. Reanalyze or replace a source to continue.",
+                    409,
                 )
             if document_id not in run["document_ids"] or document_id not in {
                 task["current_si_id"],
@@ -266,18 +271,47 @@ class TaskStoreMixin:
                 raise StoreError("invalid_review", "The source role is not established.", 422)
             machine_field = next((item for item in result["fields"] if item["key"] == field), None)
             machine = machine_field[document["role"]] if machine_field else None
-            if not machine or machine.get("method") != "gemini_vision":
+            if not machine:
+                raise StoreError("invalid_review", "The selected field is unavailable.", 422)
+            if action != "SUPPLY_INFORMATION" and machine.get("method") != "gemini_vision":
                 raise StoreError(
                     "invalid_review", "Only Gemini visual candidates can be reviewed here.", 422
                 )
-            unit = next(
-                (item for item in document.get("units", []) if item.get("page") == page), None
-            )
-            if unit is None:
-                raise StoreError(
-                    "invalid_review", "Choose a page that exists in the current PDF.", 422
+            unit = None
+            if action != "SUPPLY_INFORMATION":
+                unit = next(
+                    (item for item in document.get("units", []) if item.get("page") == page), None
                 )
-            if action == "CONFIRM_CANDIDATE":
+                if unit is None:
+                    raise StoreError(
+                        "invalid_review", "Choose a page that exists in the current PDF.", 422
+                    )
+            if action == "SUPPLY_INFORMATION":
+                if machine.get("value_state") not in {"MISSING", "AMBIGUOUS", "UNREADABLE"}:
+                    raise StoreError(
+                        "invalid_review",
+                        "Supply information only for a value missing or unusable in this source.",
+                        422,
+                    )
+                saved_raw = raw_value.strip() if isinstance(raw_value, str) else ""
+                source = (provenance or {}).get("source_name", "").strip()
+                reference = (provenance or {}).get("reference", "").strip()
+                note = (provenance or {}).get("note")
+                note = note.strip() if isinstance(note, str) and note.strip() else None
+                if not saved_raw or not source or not reference:
+                    raise StoreError(
+                        "invalid_review",
+                        "Enter a supplied value, source name, and checkable reference.",
+                        422,
+                    )
+                saved_raw, normalized, state, _ = normalize_review_value(field, saved_raw)
+                if state != "PRESENT" or normalized is None:
+                    raise StoreError(
+                        "invalid_review",
+                        "The supplied value is ambiguous. Include an explicit, supported value.",
+                        422,
+                    )
+            elif action == "CONFIRM_CANDIDATE":
                 evidence_pages = {item.get("page") for item in machine.get("evidence", [])}
                 if machine.get("raw_value") is None or page not in evidence_pages:
                     raise StoreError(
@@ -305,7 +339,11 @@ class TaskStoreMixin:
                     )
             review_id = str(uuid4())
             db.execute(
-                "INSERT INTO review_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO review_events "
+                "(id,task_id,revision,run_id,document_id,field,action,machine_raw_value,"
+                "raw_value,normalized_value,page,unit_id,provenance_source,"
+                "provenance_reference,provenance_note,actor,created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     review_id,
                     task_id,
@@ -318,11 +356,62 @@ class TaskStoreMixin:
                     saved_raw,
                     normalized,
                     page,
-                    unit["id"],
+                    unit["id"] if unit else None,
+                    source if action == "SUPPLY_INFORMATION" else None,
+                    reference if action == "SUPPLY_INFORMATION" else None,
+                    note if action == "SUPPLY_INFORMATION" else None,
                     "Demo reviewer — unverified",
                     now(),
                 ),
             )
+        return self.task_detail(task_id)
+
+    def record_completion(self, task_id, expected_revision, run_id, acknowledge_seven_field_scope):
+        from app.documents.reviews import apply_review_overlay, completion_eligibility
+        from app.store import StoreError, now
+
+        if acknowledge_seven_field_scope is not True:
+            raise StoreError(
+                "invalid_completion", "Acknowledge the bounded seven-field scope.", 422
+            )
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            task = self._task(db, task_id, expected_revision)
+            run = self._run(db, run_id)
+            if (
+                not run
+                or run["email_id"] != task_id
+                or run["status"] != "SUCCEEDED"
+                or run["revision"] != task["revision"]
+                or task["current_run_id"] != run_id
+            ):
+                raise StoreError(
+                    "stale_completion",
+                    "Complete only the current saved analysis after refreshing.",
+                    409,
+                )
+            if not self._completion(db, run_id):
+                actions = self._review_actions(db, run_id)
+                reviewed, _ = apply_review_overlay(run["result"], actions)
+                eligibility = completion_eligibility(reviewed, actions, run)
+                if not eligibility["eligible"]:
+                    raise StoreError(
+                        "completion_blocked",
+                        "This run is not eligible for completion.",
+                        409,
+                        eligibility["blockers"],
+                    )
+                db.execute(
+                    "INSERT INTO completion_acknowledgments VALUES (?,?,?,?,?,?)",
+                    (
+                        str(uuid4()),
+                        task_id,
+                        task["revision"],
+                        run_id,
+                        "Demo reviewer — unverified",
+                        now(),
+                    ),
+                )
         return self.task_detail(task_id)
 
     def task_run_detail(self, task_id, run_id):

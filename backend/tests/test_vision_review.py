@@ -213,6 +213,7 @@ def test_visual_candidates_review_overlay_refresh_and_stale_protection(scan_clie
         "reviewed": 0,
         "confirmed": 0,
         "corrected": 0,
+        "supplied": 0,
         "pending": 14,
     }
     assert len(machine["provider_calls"]) == 2
@@ -256,6 +257,7 @@ def test_visual_candidates_review_overlay_refresh_and_stale_protection(scan_clie
         "reviewed": 14,
         "confirmed": 13,
         "corrected": 1,
+        "supplied": 0,
         "pending": 0,
     }
     assert task["current_run"]["result"] == machine

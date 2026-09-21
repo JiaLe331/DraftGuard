@@ -162,6 +162,127 @@ def test_real_v1_v2_v3_deltas_reruns_history_and_persistence(task_client):
         assert saved.json()["documents"] == third["documents"]
 
 
+def test_supplied_information_stays_unresolved_and_blocks_completion(task_client):
+    client, _, _ = task_client
+    task = analyze(client, clone(client, "email_304"))
+    run = task["current_run"]
+    weight = next(field for field in run["result"]["fields"] if field["key"] == "gross_weight_kg")
+    assert weight["bl"]["value_state"] == "MISSING"
+    bl = next(doc for doc in run["result"]["documents"] if doc["role"] == "bl")
+
+    supplied = client.post(
+        f"{PREFIX}/{task['id']}/reviews",
+        json={
+            "expected_revision": task["revision"],
+            "run_id": run["id"],
+            "document_id": bl["id"],
+            "field": "gross_weight_kg",
+            "action": "SUPPLY_INFORMATION",
+            "raw_value": "131,058 KG",
+            "provenance": {
+                "source_name": "Carrier confirmation",
+                "reference": "Email dated 21 Sep 2026",
+                "note": "Confirmed by forwarding agent",
+            },
+        },
+    )
+    assert supplied.status_code == 200, supplied.text
+    task = supplied.json()
+    reviewed_weight = next(
+        field
+        for field in task["current_run"]["reviewed_result"]["fields"]
+        if field["key"] == "gross_weight_kg"
+    )
+    assert reviewed_weight["finding"] == "NEEDS_REVIEW"
+    assert reviewed_weight["bl"]["value_state"] == "MISSING"
+    assert reviewed_weight["bl"]["supplied_information"]["raw_value"] == "131,058 KG"
+    assert task["current_run"]["review_progress"]["supplied"] == 1
+    assert task["coverage"]["checked"] < 7
+
+    blocked = client.post(
+        f"{PREFIX}/{task['id']}/complete",
+        json={
+            "expected_revision": task["revision"],
+            "run_id": run["id"],
+            "acknowledge_seven_field_scope": True,
+        },
+    )
+    assert blocked.status_code == 409
+    assert "supplied_information_unverified" in {
+        item["code"] for item in blocked.json()["detail"]["blockers"]
+    }
+    assert task["current_run"]["result"] == run["result"]
+
+    missing_provenance = client.post(
+        f"{PREFIX}/{task['id']}/reviews",
+        json={
+            "expected_revision": task["revision"],
+            "run_id": run["id"],
+            "document_id": bl["id"],
+            "field": "gross_weight_kg",
+            "action": "SUPPLY_INFORMATION",
+            "raw_value": "131,058 KG",
+        },
+    )
+    assert missing_provenance.status_code == 422
+
+
+def test_completion_is_exact_idempotent_persisted_and_locks_review(task_client):
+    client, settings, _ = task_client
+    task = clone(client)
+    task = analyze(client, upload_version(client, task, 3))
+    run_id = task["current_run"]["id"]
+    assert task["current_run"]["completion_eligibility"] == {
+        "eligible": True,
+        "blockers": [],
+    }
+    payload = {
+        "expected_revision": task["revision"],
+        "run_id": run_id,
+        "acknowledge_seven_field_scope": True,
+    }
+    completed = client.post(f"{PREFIX}/{task['id']}/complete", json=payload)
+    assert completed.status_code == 200, completed.text
+    task = completed.json()
+    assert task["workflow_state"] == "CHECK_COMPLETE"
+    assert task["current_run"]["reviewed_result"]["workflow_state"] == "CHECK_COMPLETE"
+    assert task["current_run"]["result"]["workflow_state"] == "READY"
+    acknowledgment = task["current_run"]["completion"]
+    assert acknowledgment["run_id"] == run_id
+    assert acknowledgment["actor"] == "Demo reviewer — unverified"
+
+    repeated = client.post(f"{PREFIX}/{task['id']}/complete", json=payload)
+    assert repeated.status_code == 200
+    assert repeated.json()["current_run"]["completion"] == acknowledgment
+
+    locked = client.post(
+        f"{PREFIX}/{task['id']}/reviews",
+        json={
+            "expected_revision": task["revision"],
+            "run_id": run_id,
+            "document_id": task["current_si_id"],
+            "field": "shipper",
+            "action": "SUPPLY_INFORMATION",
+            "raw_value": "A",
+            "provenance": {"source_name": "Email", "reference": "Reference"},
+        },
+    )
+    assert locked.status_code == 409
+    assert locked.json()["detail"]["code"] == "completed_run_read_only"
+
+    rerun = analyze(client, task)
+    assert rerun["workflow_state"] == "READY"
+    assert rerun["current_run"]["completion"] is None
+    historical = client.get(f"{PREFIX}/{task['id']}/runs/{run_id}").json()
+    assert historical["is_historical"] is True
+    assert historical["current_run"]["completion"] == acknowledgment
+    assert historical["current_run"]["reviewed_result"]["workflow_state"] == "CHECK_COMPLETE"
+
+    with TestClient(create_app(settings)) as reopened:
+        restored = reopened.get(f"{PREFIX}/{task['id']}/runs/{run_id}").json()
+        assert restored["current_run"]["completion"] == acknowledgment
+
+
 def test_stale_upload_analysis_and_pair_selection_do_not_mutate_revision(task_client):
     client, _, _ = task_client
     first = analyze(client, clone(client))

@@ -6,7 +6,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.datastructures import UploadFile
 
 from app.dev_extraction.uploads import LimitedUploadParser
@@ -33,6 +33,13 @@ class ReviewEvidence(BaseModel):
     page: int = Field(ge=1)
 
 
+class ReviewProvenance(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_name: str = Field(min_length=1, max_length=200)
+    reference: str = Field(min_length=1, max_length=1000)
+    note: str | None = Field(default=None, max_length=2000)
+
+
 class ReviewTask(AnalyzeTask):
     run_id: str = Field(min_length=1)
     document_id: str = Field(min_length=1)
@@ -45,9 +52,24 @@ class ReviewTask(AnalyzeTask):
         "container_count",
         "gross_weight_kg",
     ]
-    action: Literal["CONFIRM_CANDIDATE", "CORRECT_EXTRACTION"]
+    action: Literal["CONFIRM_CANDIDATE", "CORRECT_EXTRACTION", "SUPPLY_INFORMATION"]
     raw_value: str | None = Field(default=None, max_length=5000)
-    evidence: ReviewEvidence
+    evidence: ReviewEvidence | None = None
+    provenance: ReviewProvenance | None = None
+
+    @model_validator(mode="after")
+    def validate_action_payload(self):
+        if self.action in {"CONFIRM_CANDIDATE", "CORRECT_EXTRACTION"}:
+            if not self.evidence or self.provenance is not None:
+                raise ValueError("Confirm and correction actions require page evidence only.")
+        elif self.evidence is not None or self.provenance is None:
+            raise ValueError("Supplied information requires provenance and no page evidence.")
+        return self
+
+
+class CompleteTask(AnalyzeTask):
+    run_id: str = Field(min_length=1)
+    acknowledge_seven_field_scope: Literal[True]
 
 
 def build_task_router(settings, store):
@@ -57,13 +79,16 @@ def build_task_router(settings, store):
         try:
             return operation()
         except StoreError as exc:
+            detail = {
+                "code": exc.code,
+                "message": str(exc),
+                "retryable": exc.status in {409, 503},
+            }
+            if exc.details is not None:
+                detail["blockers"] = exc.details
             raise HTTPException(
                 exc.status,
-                detail={
-                    "code": exc.code,
-                    "message": str(exc),
-                    "retryable": exc.status in {409, 503},
-                },
+                detail=detail,
             ) from exc
 
     def guard(request):
@@ -172,7 +197,20 @@ def build_task_router(settings, store):
                 payload.field,
                 payload.action,
                 payload.raw_value,
-                payload.evidence.page,
+                payload.evidence.page if payload.evidence else None,
+                payload.provenance.model_dump() if payload.provenance else None,
+            )
+        )
+
+    @router.post("/{task_id}/complete")
+    def complete(task_id: str, payload: CompleteTask, request: Request):
+        guard(request)
+        return execute(
+            lambda: store.record_completion(
+                task_id,
+                payload.expected_revision,
+                payload.run_id,
+                payload.acknowledge_seven_field_scope,
             )
         )
 

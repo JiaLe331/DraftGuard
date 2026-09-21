@@ -16,7 +16,7 @@ from app.dev_extraction.dataset import DatasetError
 from app.dev_extraction.service import DocumentInput, RunService
 from app.dev_extraction.store import AuditStore
 from app.documents.analysis import PIPELINE_VERSION
-from app.documents.reviews import apply_review_overlay
+from app.documents.reviews import apply_review_overlay, completion_eligibility
 from app.documents.workflow import MailboxWorkflow
 from app.extraction.models import ExtractionLimits
 from app.task_store import TaskStoreMixin
@@ -26,9 +26,10 @@ MAX_BYTES = ExtractionLimits().max_file_bytes
 
 
 class StoreError(Exception):
-    def __init__(self, code: str, message: str, status: int = 400):
+    def __init__(self, code: str, message: str, status: int = 400, details=None):
         super().__init__(message)
         self.code, self.status = code, status
+        self.details = details
 
 
 def now() -> str:
@@ -76,7 +77,8 @@ class Store(TaskStoreMixin):
                     revision INTEGER NOT NULL, run_id TEXT NOT NULL REFERENCES runs(id),
                     document_id TEXT NOT NULL REFERENCES documents(id), field TEXT NOT NULL,
                     action TEXT NOT NULL, machine_raw_value TEXT, raw_value TEXT,
-                    normalized_value TEXT, page INTEGER NOT NULL, unit_id TEXT NOT NULL,
+                    normalized_value TEXT, page INTEGER, unit_id TEXT,
+                    provenance_source TEXT, provenance_reference TEXT, provenance_note TEXT,
                     actor TEXT NOT NULL, created_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS reviews_by_run
@@ -87,7 +89,47 @@ class Store(TaskStoreMixin):
                 CREATE TRIGGER IF NOT EXISTS immutable_review_delete
                     BEFORE DELETE ON review_events
                     BEGIN SELECT RAISE(ABORT, 'Review events are append-only'); END;
+                CREATE TABLE IF NOT EXISTS completion_acknowledgments (
+                    id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES emails(id),
+                    revision INTEGER NOT NULL, run_id TEXT NOT NULL UNIQUE REFERENCES runs(id),
+                    actor TEXT NOT NULL, acknowledged_at TEXT NOT NULL
+                );
+                CREATE TRIGGER IF NOT EXISTS immutable_completion_update
+                    BEFORE UPDATE ON completion_acknowledgments
+                    BEGIN SELECT RAISE(ABORT, 'Completion acknowledgments are append-only'); END;
+                CREATE TRIGGER IF NOT EXISTS immutable_completion_delete
+                    BEFORE DELETE ON completion_acknowledgments
+                    BEGIN SELECT RAISE(ABORT, 'Completion acknowledgments are append-only'); END;
             """)
+            review_columns = {row[1]: row for row in db.execute("PRAGMA table_info(review_events)")}
+            if "provenance_source" not in review_columns:
+                db.executescript("""
+                    DROP TRIGGER IF EXISTS immutable_review_update;
+                    DROP TRIGGER IF EXISTS immutable_review_delete;
+                    DROP INDEX IF EXISTS reviews_by_run;
+                    CREATE TABLE review_events_v2 (
+                        id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES emails(id),
+                        revision INTEGER NOT NULL, run_id TEXT NOT NULL REFERENCES runs(id),
+                        document_id TEXT NOT NULL REFERENCES documents(id), field TEXT NOT NULL,
+                        action TEXT NOT NULL, machine_raw_value TEXT, raw_value TEXT,
+                        normalized_value TEXT, page INTEGER, unit_id TEXT,
+                        provenance_source TEXT, provenance_reference TEXT, provenance_note TEXT,
+                        actor TEXT NOT NULL, created_at TEXT NOT NULL
+                    );
+                    INSERT INTO review_events_v2
+                        (id,task_id,revision,run_id,document_id,field,action,machine_raw_value,
+                         raw_value,normalized_value,page,unit_id,actor,created_at)
+                    SELECT id,task_id,revision,run_id,document_id,field,action,machine_raw_value,
+                           raw_value,normalized_value,page,unit_id,actor,created_at
+                    FROM review_events;
+                    DROP TABLE review_events;
+                    ALTER TABLE review_events_v2 RENAME TO review_events;
+                    CREATE INDEX reviews_by_run ON review_events(run_id, created_at);
+                    CREATE TRIGGER immutable_review_update BEFORE UPDATE ON review_events
+                        BEGIN SELECT RAISE(ABORT, 'Review events are append-only'); END;
+                    CREATE TRIGGER immutable_review_delete BEFORE DELETE ON review_events
+                        BEGIN SELECT RAISE(ABORT, 'Review events are append-only'); END;
+                """)
             if "audit_run_id" not in {row[1] for row in db.execute("PRAGMA table_info(runs)")}:
                 db.execute("ALTER TABLE runs ADD COLUMN audit_run_id TEXT")
             for table, columns in {
@@ -315,16 +357,30 @@ class Store(TaskStoreMixin):
             )
         ]
 
+    def _completion(self, db, run_id):
+        if not run_id:
+            return None
+        row = db.execute(
+            "SELECT * FROM completion_acknowledgments WHERE run_id=?", (run_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
     def _public_run(self, db, run):
         if not run:
             return None
         public = deepcopy(run)
         actions = self._review_actions(db, run["id"])
         public["review_actions"] = actions
+        completion = self._completion(db, run["id"])
+        public["completion"] = completion
         if run.get("result"):
             reviewed, progress = apply_review_overlay(run["result"], actions)
+            eligibility = completion_eligibility(reviewed, actions, run)
+            if completion and eligibility["eligible"]:
+                reviewed["workflow_state"] = "CHECK_COMPLETE"
             public["reviewed_result"] = reviewed
             public["review_progress"] = progress
+            public["completion_eligibility"] = eligibility
         else:
             public["reviewed_result"] = None
             public["review_progress"] = {
@@ -332,7 +388,14 @@ class Store(TaskStoreMixin):
                 "reviewed": 0,
                 "confirmed": 0,
                 "corrected": 0,
+                "supplied": 0,
                 "pending": 0,
+            }
+            public["completion_eligibility"] = {
+                "eligible": False,
+                "blockers": [
+                    {"code": "no_result", "message": "A successful comparison is required."}
+                ],
             }
         return public
 

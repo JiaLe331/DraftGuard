@@ -10,15 +10,18 @@ def apply_review_overlay(machine_result: dict, actions: list[dict]) -> tuple[dic
         latest[(action["document_id"], action["field"])] = action
 
     documents = {item["id"]: item for item in reviewed.get("documents", [])}
-    total = confirmed = corrected = 0
+    total = confirmed = corrected = supplied = 0
     for field in reviewed.get("fields", []):
         for role in ("si", "bl"):
             extraction = field[role]
+            document = next((item for item in documents.values() if item["role"] == role), None)
+            action = latest.get((document["id"], field["key"])) if document else None
+            if action and action["action"] == "SUPPLY_INFORMATION":
+                extraction["supplied_information"] = action
+                supplied += 1
             if extraction.get("method") != "gemini_vision":
                 continue
             total += 1
-            document = next((item for item in documents.values() if item["role"] == role), None)
-            action = latest.get((document["id"], field["key"])) if document else None
             if not action:
                 continue
             effective = deepcopy(extraction)
@@ -52,7 +55,7 @@ def apply_review_overlay(machine_result: dict, actions: list[dict]) -> tuple[dic
                     ],
                 )
                 corrected += 1
-            else:
+            elif action["action"] == "CONFIRM_CANDIDATE":
                 effective.update(
                     requires_human_confirmation=False,
                     reason="human_confirmed_visual_candidate",
@@ -62,6 +65,8 @@ def apply_review_overlay(machine_result: dict, actions: list[dict]) -> tuple[dic
                     ],
                 )
                 confirmed += 1
+            else:
+                continue
             effective["review"] = action
             field[role] = effective
 
@@ -71,6 +76,7 @@ def apply_review_overlay(machine_result: dict, actions: list[dict]) -> tuple[dic
             "reviewed": 0,
             "confirmed": 0,
             "corrected": 0,
+            "supplied": supplied,
             "pending": 0,
         }
 
@@ -134,6 +140,60 @@ def apply_review_overlay(machine_result: dict, actions: list[dict]) -> tuple[dic
         "reviewed": confirmed + corrected,
         "confirmed": confirmed,
         "corrected": corrected,
+        "supplied": supplied,
         "pending": total - confirmed - corrected,
     }
     return reviewed, progress
+
+
+def completion_eligibility(reviewed_result: dict | None, actions: list[dict], run: dict) -> dict:
+    """Return stable blockers for acknowledging one immutable seven-field run."""
+    blockers = []
+
+    def block(code, message):
+        if not any(item["code"] == code for item in blockers):
+            blockers.append({"code": code, "message": message})
+
+    if (
+        not reviewed_result
+        or reviewed_result.get("classification", {}).get("category") != "BL_COMPARISON"
+    ):
+        block("not_comparison", "This run is not a completed SI and draft-BL comparison.")
+    document_ids = set(run.get("document_ids") or [])
+    if (
+        not run.get("current_si_id")
+        or not run.get("current_bl_id")
+        or not {
+            run.get("current_si_id"),
+            run.get("current_bl_id"),
+        }.issubset(document_ids)
+    ):
+        block("missing_documents", "Both current SI and draft-BL sources are required.")
+    fields = reviewed_result.get("fields", []) if reviewed_result else []
+    if (
+        not reviewed_result
+        or reviewed_result.get("coverage") != {"checked": 7, "total": 7}
+        or len(fields) != 7
+    ):
+        block("incomplete_coverage", "All seven fields must be checked.")
+    if reviewed_result and any(item.get("finding") != "MATCH" for item in fields):
+        block("unresolved_findings", "Every field must have a confirmed match.")
+    if reviewed_result and reviewed_result.get("known_defect_fields"):
+        block("discrepancies", "Resolve every discrepancy before completing the check.")
+    if reviewed_result and reviewed_result.get("review_requirements"):
+        block("pending_review", "Resolve every pending review requirement.")
+    if any(
+        extraction.get("requires_human_confirmation")
+        for item in fields
+        for extraction in (item.get("si", {}), item.get("bl", {}))
+    ):
+        block("pending_candidates", "Confirm or correct every visual candidate.")
+    latest = {}
+    for action in actions:
+        latest[(action["document_id"], action["field"])] = action
+    if any(item.get("action") == "SUPPLY_INFORMATION" for item in latest.values()):
+        block(
+            "supplied_information_unverified",
+            "Replace the source document to verify externally supplied information.",
+        )
+    return {"eligible": not blockers, "blockers": blockers}
